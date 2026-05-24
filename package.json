@@ -48,6 +48,7 @@
     },
     "dependencies": {
         "@clangd/install": "0.1.20",
+        "vscode-cmake-tools": "^1.7.0",
         "vscode-languageclient": "^9.0.1"
     },
     "devDependencies": {

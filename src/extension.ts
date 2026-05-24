@@ -5,6 +5,7 @@ import {ClangdExtension} from '../api/vscode-clangd';
 import {ClangdExtensionImpl} from './api';
 import {ClangdContext} from './clangd-context';
 import {get, update} from './config';
+import {setLoggerOutputChannel} from './logger';
 
 let apiInstance: ClangdExtensionImpl|undefined;
 
@@ -15,6 +16,7 @@ let apiInstance: ClangdExtensionImpl|undefined;
 export async function activate(context: vscode.ExtensionContext):
     Promise<ClangdExtension> {
   const outputChannel = vscode.window.createOutputChannel('clangd');
+  setLoggerOutputChannel(outputChannel);
   context.subscriptions.push(outputChannel);
 
   let clangdContext: ClangdContext|null = null;

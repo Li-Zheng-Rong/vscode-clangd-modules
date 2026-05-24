@@ -3,11 +3,11 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { promisify } from "util";
 
-import { CodeModel } from "vscode-cmake-tools/api";
+import { CodeModel } from "vscode-cmake-tools";
 import { createLogger } from "./logger";
 import * as util from "./util";
 
-const log = createLogger('stdmodule');
+const log = createLogger('std-module');
 
 interface StdlibModulesJson {
     modules: Array<{ "source-path": string }>;

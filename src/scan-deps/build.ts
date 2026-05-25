@@ -2,6 +2,7 @@ import {CompilationDatabase, CompileCommand} from '../compilation-database';
 import * as util from '../util';
 
 import type {FileModuleImportExportEntries, ModuleExportEntry, ModuleImportEntry} from './index';
+import {isGccToolchain} from './util';
 
 interface ModuleRef {
     name: string;
@@ -156,9 +157,9 @@ function filterGeneratedArguments(args: readonly string[]): string[] {
     return filtered;
 }
 
-function addModuleArgs(args: readonly string[], output: string | undefined, inputs: readonly ModuleRef[]): string[] {
+function addModuleArgs(args: readonly string[], output: string | undefined, inputs: readonly ModuleRef[], addModuleLanguage: boolean): string[] {
     const moduleArgs = [
-        ...(output ? ["-x", "c++-module", `-fmodule-output=${output}`] : []),
+        ...(output ? [...(addModuleLanguage ? ["-x", "c++-module"] : []), `-fmodule-output=${output}`] : []),
         ...inputs.map(input => `-fmodule-file=${input.name}=${input.path}`),
     ];
     if (moduleArgs.length === 0)
@@ -179,11 +180,12 @@ function buildCommand(
 ): GeneratedCompileCommand {
     const output = scanDeps ? moduleOutput(scanDeps) : undefined;
     const inputs = scanDeps ? expandModuleInputs(moduleInputs(scanDeps, providedModules), graph) : [];
+    const compiler = command.arguments[0];
     return {
         directory: command.directory,
         file: command.file,
         ...(command.output ? { output: command.output } : {}),
-        arguments: addModuleArgs(filterGeneratedArguments(command.arguments), output, inputs),
+        arguments: addModuleArgs(filterGeneratedArguments(command.arguments), output, inputs, !compiler || !isGccToolchain(compiler)),
     };
 }
 

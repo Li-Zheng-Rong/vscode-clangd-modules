@@ -14,13 +14,12 @@ export async function scanEntry(
         return undefined;
 
     let scanResult: ModuleScanResult | undefined;
-    const clangScanDepsPath = clangScanDepsPathForToolchain(compiler);
-    if (clangScanDepsPath)
-        scanResult = await scanClang(entry);
+    if (isMsvcToolchain(compiler))
+        scanResult = await scanMsvc(entry);
     else if (isGccToolchain(compiler))
         scanResult = await scanGcc(entry);
-    else if (isMsvcToolchain(compiler))
-        scanResult = await scanMsvc(entry);
+    else if (clangScanDepsPathForToolchain(compiler))
+        scanResult = await scanClang(entry);
 
     return scanResult ? {file: resolveCommandPath(entry, entry.file), ...scanResult} : undefined;
 }

@@ -140,9 +140,22 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   }
 
   private toolchainForProject(project: Project): string|undefined {
-    for (const toolchain of project.codeModel?.toolchains?.values() ?? [])
+    const toolchains = project.codeModel?.toolchains;
+    if (!toolchains)
+      return undefined;
+
+    const cxxToolchain = this.toolchainForLanguage(toolchains, 'CXX');
+    if (cxxToolchain)
+      return cxxToolchain;
+
+    for (const toolchain of toolchains.values())
       return toolchain.path;
     return undefined;
+  }
+
+  private toolchainForLanguage(toolchains: Map<string, {path: string}>, language: string): string|undefined {
+    return toolchains.get(language)?.path ??
+        [...toolchains.entries()].find(([key]) => key.toUpperCase() === language)?.[1].path;
   }
 
   dispose(): void {

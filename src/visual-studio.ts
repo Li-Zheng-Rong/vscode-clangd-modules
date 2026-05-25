@@ -50,6 +50,7 @@ interface VSInstallationCache {
 }
 
 let cachedVSInstallations: VSInstallationCache | null = null;
+const cachedVarsByToolchain = new Map<string, Promise<Environment | undefined>>();
 
 function normalizePath(filePath: string): string {
     return util.platformNormalizePath(filePath);
@@ -79,6 +80,19 @@ function msvcToolchainParts(toolchainPath: string): {hostArch: string; targetArc
 
 export async function varsForMsvcToolchain(toolchainPath: string): Promise<Environment | undefined> {
     const normalizedToolchain = normalizeExistingPath(toolchainPath);
+    const cached = cachedVarsByToolchain.get(normalizedToolchain);
+    if (cached)
+        return cached;
+
+    const environment = varsForMsvcToolchainUncached(toolchainPath, normalizedToolchain);
+    cachedVarsByToolchain.set(normalizedToolchain, environment);
+    return environment;
+}
+
+async function varsForMsvcToolchainUncached(
+    toolchainPath: string,
+    normalizedToolchain: string,
+): Promise<Environment | undefined> {
     for (const installation of await vsInstallations()) {
         if (!normalizedToolchain.startsWith(normalizePath(installation.installationPath)))
             continue;

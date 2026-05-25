@@ -6,6 +6,7 @@ import {ClangdExtension} from '../api/vscode-clangd';
 import {ClangdExtensionImpl} from './api';
 import {CMakeActiveProjectManager} from './cmake-active-project-manager';
 import {get, update} from './config';
+import * as install from './install';
 import {setLoggerOutputChannel} from './logging';
 
 let apiInstance: ClangdExtensionImpl|undefined;
@@ -19,6 +20,7 @@ export async function activate(context: vscode.ExtensionContext):
   const outputChannel = vscode.window.createOutputChannel('clangd');
   setLoggerOutputChannel(outputChannel);
   context.subscriptions.push(outputChannel);
+  await install.registerCommands(context.subscriptions, context.globalStoragePath);
 
   let cmakeProjectManager: CMakeActiveProjectManager|null = null;
   let clangdClient: BaseLanguageClient|undefined;

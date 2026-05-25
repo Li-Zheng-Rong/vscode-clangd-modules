@@ -12,13 +12,18 @@ export async function activate(disposables: vscode.Disposable[],
                                globalStoragePath: string):
     Promise<string|null> {
   const ui = await UI.create(disposables, globalStoragePath);
+  const status =
+      await common.prepare(ui, await config.get<boolean>('checkUpdates'));
+  return status.clangdPath;
+}
+
+export async function registerCommands(disposables: vscode.Disposable[],
+                                       globalStoragePath: string): Promise<void> {
+  const ui = await UI.create(disposables, globalStoragePath);
   disposables.push(vscode.commands.registerCommand(
       'clangd.install', async () => common.installLatest(ui)));
   disposables.push(vscode.commands.registerCommand(
       'clangd.update', async () => common.checkUpdates(true, ui)));
-  const status =
-      await common.prepare(ui, await config.get<boolean>('checkUpdates'));
-  return status.clangdPath;
 }
 
 class UI {

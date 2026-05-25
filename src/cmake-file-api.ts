@@ -1,6 +1,6 @@
 import * as path from 'path';
 
-import {createLogger} from './logger';
+import {createLogger} from './logging';
 import {fs} from './pr';
 import * as util from './util';
 

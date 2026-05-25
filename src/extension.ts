@@ -5,7 +5,7 @@ import {ClangdExtension} from '../api/vscode-clangd';
 import {ClangdExtensionImpl} from './api';
 import {ClangdContext} from './clangd-context';
 import {get, update} from './config';
-import {setLoggerOutputChannel} from './logger';
+import {setLoggerOutputChannel} from './logging';
 
 let apiInstance: ClangdExtensionImpl|undefined;
 

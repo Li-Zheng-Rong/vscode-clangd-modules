@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
+import {BaseLanguageClient} from 'vscode-languageclient';
 
 import {ClangdExtension} from '../api/vscode-clangd';
 
 import {ClangdExtensionImpl} from './api';
-import {ClangdContext} from './clangd-context';
+import {CMakeActiveProjectManager} from './cmake-active-project-manager';
 import {get, update} from './config';
-import {registerGeneratedCompileCommandsCommand} from './generate-cdb';
 import {setLoggerOutputChannel} from './logging';
 
 let apiInstance: ClangdExtensionImpl|undefined;
@@ -20,14 +20,27 @@ export async function activate(context: vscode.ExtensionContext):
   setLoggerOutputChannel(outputChannel);
   context.subscriptions.push(outputChannel);
 
-  let clangdContext: ClangdContext|null = null;
+  let cmakeProjectManager: CMakeActiveProjectManager|null = null;
+  let clangdClient: BaseLanguageClient|undefined;
+  const ensureCMakeProjectManager = async () => {
+    if (cmakeProjectManager)
+      return cmakeProjectManager;
 
-  registerGeneratedCompileCommandsCommand(context);
+    cmakeProjectManager = await CMakeActiveProjectManager.create(context.globalStoragePath, outputChannel);
+    clangdClient = cmakeProjectManager.client;
+    cmakeProjectManager.onDidChangeClient(client => {
+      clangdClient = client;
+      if (apiInstance)
+        apiInstance.client = client;
+    });
+    context.subscriptions.push(cmakeProjectManager);
+    return cmakeProjectManager;
+  };
 
   context.subscriptions.push(
       vscode.commands.registerCommand('clangd.activate', async () => {
-        if (clangdContext && (clangdContext.clientIsStarting() ||
-                              clangdContext.clientIsRunning())) {
+        if (cmakeProjectManager && (cmakeProjectManager.clientIsStarting() ||
+                                    cmakeProjectManager.clientIsRunning())) {
           return;
         }
         vscode.commands.executeCommand('clangd.restart');
@@ -54,35 +67,27 @@ export async function activate(context: vscode.ExtensionContext):
         // stop/start cycle in this situation is pointless, and doesn't work
         // anyways because the client can't be stop()-ped when it's still in the
         // Starting state).
-        if (clangdContext && clangdContext.clientIsStarting()) {
+        if (cmakeProjectManager && cmakeProjectManager.clientIsStarting()) {
           return;
         }
-        if (clangdContext)
-          clangdContext.dispose();
-        clangdContext = await ClangdContext.create(context.globalStoragePath,
-                                                   outputChannel);
-        if (clangdContext)
-          context.subscriptions.push(clangdContext);
+        const manager = await ensureCMakeProjectManager();
+        await manager.restartClangd();
         if (apiInstance) {
-          apiInstance.client = clangdContext?.client;
+          apiInstance.client = clangdClient;
         }
       }));
   context.subscriptions.push(
       vscode.commands.registerCommand('clangd.shutdown', async () => {
-        if (clangdContext && clangdContext.clientIsStarting()) {
+        if (cmakeProjectManager && cmakeProjectManager.clientIsStarting()) {
           return;
         }
-        if (clangdContext)
-          clangdContext.dispose();
+        cmakeProjectManager?.shutdownClangd();
       }));
 
   let shouldCheck = false;
 
   if (vscode.workspace.getConfiguration('clangd').get<boolean>('enable')) {
-    clangdContext =
-        await ClangdContext.create(context.globalStoragePath, outputChannel);
-    if (clangdContext)
-      context.subscriptions.push(clangdContext);
+    await ensureCMakeProjectManager();
 
     shouldCheck = vscode.workspace.getConfiguration('clangd').get<boolean>(
                       'detectExtensionConflicts') ??
@@ -121,6 +126,6 @@ export async function activate(context: vscode.ExtensionContext):
     }, 5000);
   }
 
-  apiInstance = new ClangdExtensionImpl(clangdContext?.client);
+  apiInstance = new ClangdExtensionImpl(clangdClient);
   return apiInstance;
 }

@@ -229,12 +229,14 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
             return;
         }
 
+        const environment = await this.visualStudioEnvironmentForToolchain();
+        this.logClangdEnvironment(environment);
         this.clangdContext = await ClangdContext.create(
             this.options.globalStoragePath,
             this.options.outputChannel,
             {
                 compileCommandsDir: this.generatedCompileCommandsDir,
-                environment: await this.visualStudioEnvironmentForToolchain(),
+                environment,
             });
         this.onDidChangeClientEmitter.fire(this.client);
     }
@@ -258,6 +260,30 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
             return undefined;
 
         return varsForMsvcToolchain(toolchain);
+    }
+
+    private logClangdEnvironment(environment: Environment | undefined): void {
+        const toolchain = this.options.toolchain;
+        if (!toolchain) {
+            log.debug('Starting clangd without toolchain-specific environment: no CMake toolchain path.');
+            return;
+        }
+
+        if (!isMsvcToolchain(toolchain) && !isClangClToolchain(toolchain)) {
+            log.debug(`Starting clangd without Visual Studio environment for non-MSVC toolchain: ${toolchain}`);
+            return;
+        }
+
+        if (!environment) {
+            log.warning(`Starting clangd without Visual Studio environment: failed to resolve vars for ${toolchain}`);
+            return;
+        }
+
+        const include = environment.INCLUDE ?? '';
+        const lib = environment.LIB ?? '';
+        const pathValue = environment.PATH ?? '';
+        log.info(`Starting clangd with Visual Studio environment for ${toolchain}: INCLUDE=${include ? 'set' : 'missing'}, LIB=${lib ? 'set' : 'missing'}, PATH=${pathValue ? 'set' : 'missing'}`);
+        log.debug(`Visual Studio INCLUDE for clangd: ${include}`);
     }
 
     dispose(): void {

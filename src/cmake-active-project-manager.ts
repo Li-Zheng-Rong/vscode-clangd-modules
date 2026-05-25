@@ -20,6 +20,7 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   private activeState: ActiveCMakeProjectState|undefined;
   private cdbManager: CompilationDatabaseScanDepsManager|undefined;
   private cdbManagerClientSubscription: vscode.Disposable|undefined;
+  private codeModelSubscription: vscode.Disposable|undefined;
   private activeProjectGeneration = 0;
 
   readonly onDidChangeClient = this.onDidChangeClientEmitter.event;
@@ -110,15 +111,50 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   clientIsRunning(): boolean { return this.cdbManager?.clientIsRunning() ?? false; }
 
   private setActiveState(state: ActiveCMakeProjectState|undefined): void {
+    this.codeModelSubscription?.dispose();
+    this.codeModelSubscription = undefined;
     this.activeState = state;
+
+    if (state)
+      this.codeModelSubscription = state.project.onCodeModelChanged(
+          () => { this.handleCodeModelChanged(state.project); });
+
+    this.resetCdbManagerWhenReady();
+  }
+
+  private handleCodeModelChanged(project: Project): void {
+    if (this.activeState?.project !== project)
+      return;
+
+    this.resetCdbManagerWhenReady();
+  }
+
+  private resetCdbManagerWhenReady(): void {
+    if (!this.activeState) {
+      this.clearCdbManager();
+      this.onDidChangeClientEmitter.fire(undefined);
+      return;
+    }
+
+    if (!this.activeState.project.codeModel) {
+      log.info('Waiting for CMake code model before starting clangd.');
+      this.clearCdbManager();
+      this.onDidChangeClientEmitter.fire(undefined);
+      return;
+    }
+
     this.resetCdbManager();
   }
 
-  private resetCdbManager(): void {
+  private clearCdbManager(): void {
     this.cdbManagerClientSubscription?.dispose();
     this.cdbManagerClientSubscription = undefined;
     this.cdbManager?.dispose();
     this.cdbManager = undefined;
+  }
+
+  private resetCdbManager(): void {
+    this.clearCdbManager();
 
     if (!this.activeState) {
       this.onDidChangeClientEmitter.fire(undefined);
@@ -141,15 +177,29 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
 
   private toolchainForProject(project: Project): string|undefined {
     const toolchains = project.codeModel?.toolchains;
-    if (!toolchains)
+    if (!project.codeModel) {
+      log.warning('CMake project code model is not available; cannot determine CXX toolchain.');
       return undefined;
+    }
+
+    if (!toolchains || toolchains.size === 0) {
+      log.warning('CMake project code model has no toolchains; cannot determine CXX toolchain.');
+      return undefined;
+    }
+
+    for (const [language, toolchain] of toolchains)
+      log.debug(`CMake code model toolchain: ${language} -> ${toolchain.path}`);
 
     const cxxToolchain = this.toolchainForLanguage(toolchains, 'CXX');
-    if (cxxToolchain)
+    if (cxxToolchain) {
+      log.info(`Using CMake CXX toolchain: ${cxxToolchain}`);
       return cxxToolchain;
+    }
 
-    for (const toolchain of toolchains.values())
+    for (const toolchain of toolchains.values()) {
+      log.warning(`CMake CXX toolchain not found; falling back to first toolchain: ${toolchain.path}`);
       return toolchain.path;
+    }
     return undefined;
   }
 
@@ -161,8 +211,10 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   dispose(): void {
     this.subscriptions.forEach(subscription => { subscription.dispose(); });
     this.subscriptions.length = 0;
+    this.codeModelSubscription?.dispose();
     this.cdbManagerClientSubscription?.dispose();
     this.cdbManager?.dispose();
+    this.codeModelSubscription = undefined;
     this.cdbManagerClientSubscription = undefined;
     this.cdbManager = undefined;
     this.onDidChangeClientEmitter.dispose();

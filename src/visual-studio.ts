@@ -50,6 +50,36 @@ interface VSInstallationCache {
 
 let cachedVSInstallations: VSInstallationCache | null = null;
 
+function normalizePath(filePath: string): string {
+    return util.platformNormalizePath(filePath);
+}
+
+function msvcToolchainParts(toolchainPath: string): {hostArch: string; targetArch: string; toolsetVersion?: string} {
+    const parts = normalizePath(toolchainPath).split('/');
+    const msvcIndex = parts.findIndex(part => part.toLowerCase() === 'msvc');
+    const binIndex = parts.findIndex(part => part.toLowerCase() === 'bin');
+    const hostPart = parts.find(part => part.toLowerCase().startsWith('host'));
+    const hostArch = hostPart?.substring('host'.length).toLowerCase() || 'x64';
+    const targetArch = binIndex >= 0 && parts[binIndex + 2] ? parts[binIndex + 2].toLowerCase() : hostArch;
+    return {
+        hostArch,
+        targetArch,
+        toolsetVersion: msvcIndex >= 0 ? parts[msvcIndex + 1] : undefined,
+    };
+}
+
+export async function varsForMsvcToolchain(toolchainPath: string): Promise<Environment | undefined> {
+    const normalizedToolchain = normalizePath(toolchainPath);
+    for (const installation of await vsInstallations()) {
+        if (!normalizedToolchain.startsWith(normalizePath(installation.installationPath)))
+            continue;
+
+        const {hostArch, targetArch, toolsetVersion} = msvcToolchainParts(toolchainPath);
+        return await varsForVSInstallation(installation, hostArch, targetArch, toolsetVersion) ?? undefined;
+    }
+    return undefined;
+}
+
 /**
  * Get a list of all Visual Studio installations available from vswhere.exe.
  * Results are cached for 15 minutes.

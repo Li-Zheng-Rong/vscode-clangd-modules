@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import * as vscodelc from 'vscode-languageclient/node';
 
@@ -10,9 +11,11 @@ import * as inlayHints from './inlay-hints';
 import * as install from './install';
 import * as memoryUsage from './memory-usage';
 import * as openConfig from './open-config';
-import {activeCMakeBuildDirectory, generatedCompileCommandsDir} from './generate-cdb';
+import {EnvironmentUtils, Environment} from './environment-variables';
+import {activeCMakeBuildDirectory, activeCMakeCodeModel, generatedCompileCommandsDir} from './generate-cdb';
 import * as switchSourceHeader from './switch-source-header';
 import * as typeHierarchy from './type-hierarchy';
+import {varsForMsvcToolchain} from './visual-studio';
 
 export const clangdDocumentSelector = [
   {scheme: 'file', language: 'c'},
@@ -55,6 +58,23 @@ class EnableEditsNearCursorFeature implements vscodelc.StaticFeature {
   }
   getState(): vscodelc.FeatureState { return {kind: 'static'}; }
   clear() {}
+}
+
+function isMsvcLikeToolchain(toolchainPath: string): boolean {
+  return /^(?:cl|clang-cl)(?:\.exe)?$/i.test(path.basename(toolchainPath));
+}
+
+async function visualStudioEnvironmentForActiveToolchain(): Promise<Environment|undefined> {
+  const codeModel = await activeCMakeCodeModel();
+  for (const toolchain of codeModel?.toolchains?.values() ?? []) {
+    if (!isMsvcLikeToolchain(toolchain.path))
+      continue;
+
+    const environment = await varsForMsvcToolchain(toolchain.path);
+    if (environment)
+      return environment;
+  }
+  return undefined;
 }
 
 export class ClangdContext implements vscode.Disposable {
@@ -106,10 +126,14 @@ export class ClangdContext implements vscode.Disposable {
         shell: useScriptAsExecutable
       }
     };
+    const visualStudioEnvironment = await visualStudioEnvironmentForActiveToolchain();
     const traceFile = await config.get<string>('trace');
-    if (!!traceFile) {
-      const trace = {CLANGD_TRACE: traceFile};
-      clangd.options = {...clangd.options, env: {...process.env, ...trace}};
+    const trace = traceFile ? {CLANGD_TRACE: traceFile} : undefined;
+    if (visualStudioEnvironment || trace) {
+      clangd.options = {
+        ...clangd.options,
+        env: EnvironmentUtils.merge([process.env, visualStudioEnvironment, trace]),
+      };
     }
     const serverOptions: vscodelc.ServerOptions = clangd;
 

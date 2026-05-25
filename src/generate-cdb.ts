@@ -43,6 +43,16 @@ export async function activeCMakeBuildDirectory(): Promise<string | undefined> {
     return project?.getBuildDirectory();
 }
 
+export async function activeCMakeCodeModel(): Promise<CodeModel.Content | undefined> {
+    const api = await getCMakeToolsApi(Version.latest);
+    const uri = activeWorkspaceFolderUri();
+    if (!api || !uri)
+        return undefined;
+
+    const project = await api.getProject(uri);
+    return project?.codeModel;
+}
+
 export async function refreshGeneratedCompileCommandsAfterBuild(
     buildDirectory: string,
     database: CompilationDatabase,

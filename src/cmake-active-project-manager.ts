@@ -27,9 +27,9 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
                       outputChannel: vscode.OutputChannel): Promise<CMakeActiveProjectManager> {
     const api = await getCMakeToolsApi(Version.latest);
     if (!api) {
-      log.warning('CMake Tools API is not available.');
+      log.warning('CMake Tools API is not available; using fallback build directory.');
       void vscode.window.showWarningMessage(
-          'CMake Tools API is not available. clangd modules support requires the CMake Tools extension.');
+          'CMake Tools API is not available. clangd modules support will use the fallback build directory.');
     }
 
     const manager = new CMakeActiveProjectManager(
@@ -49,9 +49,13 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
     if (this.api) {
       this.subscriptions.push(this.api.onActiveProjectChanged(
           uri => { void this.handleActiveProjectChanged(uri); }));
+      await this.handleActiveProjectChanged(this.initialProjectUri());
+      return;
     }
 
-    await this.handleActiveProjectChanged(this.initialProjectUri());
+    this.setActiveState({
+      compilationDatabasePath: await this.fallbackCompilationDatabasePath(this.initialProjectUri()),
+    });
   }
 
   private initialProjectUri(): vscode.Uri|undefined {
@@ -95,6 +99,15 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
 
   async refreshGeneratedCompileCommands(): Promise<boolean> {
     this.modulesEnabled = await config.get<boolean>('modules.enabled');
+
+    if (!this.api) {
+      const compilationDatabasePath = await this.fallbackCompilationDatabasePath(this.initialProjectUri());
+      if (this.activeState?.compilationDatabasePath !== compilationDatabasePath) {
+        this.setActiveState({compilationDatabasePath});
+        return true;
+      }
+    }
+
     this.cdbManager?.setOptions({modulesEnabled: this.modulesEnabled});
     return await this.cdbManager?.refreshCdb(true) ?? false;
   }
@@ -110,6 +123,15 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   private setActiveState(state: ActiveCMakeProjectState|undefined): void {
     this.activeState = state;
     this.resetCdbManager();
+  }
+
+  private async fallbackCompilationDatabasePath(uri: vscode.Uri|undefined): Promise<string> {
+    const configuredBuildDirectory = await config.get<string>('modules.fallbackBuildDirectory');
+    const baseDirectory = uri?.fsPath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const buildDirectory = path.isAbsolute(configuredBuildDirectory)
+        ? configuredBuildDirectory
+        : path.resolve(baseDirectory, configuredBuildDirectory);
+    return path.join(buildDirectory, 'compile_commands.json');
   }
 
   private clearCdbManager(): void {

@@ -89,9 +89,11 @@ export async function activate(context: vscode.ExtensionContext):
       vscode.commands.registerCommand('clangd.refreshGeneratedCompileCommands', async () => {
         const manager = await ensureCMakeProjectManager();
         await manager.refreshGeneratedCompileCommands();
-      }));
+  }));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async event => {
-    if (!event.affectsConfiguration('clangd.modules.enabled') || !cmakeProjectManager)
+    if ((!event.affectsConfiguration('clangd.modules.enabled') &&
+         !event.affectsConfiguration('clangd.modules.fallbackBuildDirectory')) ||
+        !cmakeProjectManager)
       return;
 
     await cmakeProjectManager.refreshGeneratedCompileCommands();

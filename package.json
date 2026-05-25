@@ -2,7 +2,7 @@
     "name": "vscode-clangd",
     "displayName": "clangd",
     "description": "C/C++ completion, navigation, and insights",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "publisher": "llvm-vs-code-extensions",
     "license": "MIT",
     "homepage": "https://clangd.llvm.org/",
@@ -117,6 +117,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Enable generated compile commands and clangd experimental C++ modules support."
+                },
+                "clangd.modules.fallbackBuildDirectory": {
+                    "type": "string",
+                    "default": "build",
+                    "description": "Build directory used for compile_commands.json when CMake Tools is not available. Relative paths are resolved from the active workspace folder."
                 },
                 "clangd.trace": {
                     "type": "string",

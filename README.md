@@ -1,5 +1,71 @@
 # clangd
 
+## Usage / 使用方式
+
+### English
+
+This build adds generated compile database support for C++ modules on top of the
+regular clangd extension.
+
+1. Install the extension VSIX in VS Code.
+2. Use the latest available clangd when possible. Tested with clangd 22.1.0 and newer.
+3. The generated database supports GCC, MSVC, and Clang. The extension invokes
+   the matching compiler dependency scanner to determine C++ module dependencies.
+4. Make sure your project has a CMake build directory that contains
+   `compile_commands.json`.
+5. If you use CMake Tools, keep `cmake.exportCompileCommandsFile` set to `true`
+   so CMake exports the compilation database. This setting defaults to `true`.
+6. If the CMake Tools extension is available, this extension follows the active
+   CMake project and reads its `compile_commands.json`.
+7. If CMake Tools is not available, it falls back to
+   `clangd.modules.fallbackBuildDirectory`, which defaults to `build` under the
+   active workspace folder.
+8. The extension writes a generated clangd database to
+   `<build-dir>/.clangd/compile_commands.json` and starts clangd with
+   `--compile-commands-dir=<build-dir>/.clangd` and
+   `--experimental-modules-support`.
+9. To regenerate manually, run `clangd: Refresh Generated Compile Commands` from
+   the command palette.
+
+Useful settings:
+
+```json
+{
+  "clangd.modules.enabled": true,
+  "clangd.modules.fallbackBuildDirectory": "build"
+}
+```
+
+### 中文
+
+这个版本在常规 clangd 扩展基础上，增加了用于 C++ modules 的生成式编译数据库支持。
+
+1. 在 VS Code 中安装生成的 VSIX。
+2. 推荐尽量使用最新版本 clangd。已使用 clangd 22.1.0 及更新版本测试。
+3. 生成式编译数据库支持 GCC、MSVC 和 Clang。扩展会调用对应编译器的依赖扫描能力来确定
+   C++ module 依赖关系。
+4. 确认项目的 CMake 构建目录中存在 `compile_commands.json`。
+5. 如果使用 CMake Tools，请保持 `cmake.exportCompileCommandsFile` 为 `true`，让 CMake
+   导出编译数据库。该配置默认值就是 `true`。
+6. 如果 CMake Tools 扩展可用，本扩展会跟随当前 active CMake project，并读取对应的
+   `compile_commands.json`。
+7. 如果 CMake Tools 不可用，则使用 `clangd.modules.fallbackBuildDirectory`，默认是当前
+   workspace 下的 `build` 目录。
+8. 扩展会把生成后的 clangd 编译数据库写入
+   `<build-dir>/.clangd/compile_commands.json`，并使用
+   `--compile-commands-dir=<build-dir>/.clangd` 和
+   `--experimental-modules-support` 启动 clangd。
+9. 如需手动重新生成，可在命令面板运行 `clangd: Refresh Generated Compile Commands`。
+
+常用配置：
+
+```json
+{
+  "clangd.modules.enabled": true,
+  "clangd.modules.fallbackBuildDirectory": "build"
+}
+```
+
 [clangd](https://clangd.llvm.org) helps developers write, understand and
 improve C/C++ code by providing:
 

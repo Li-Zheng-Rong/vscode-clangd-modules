@@ -30,8 +30,13 @@ export interface CompilationDatabaseUpdate {
     removed: string[];
 }
 
+function normalizeCompileCommandPath(directory: string, file: string): string {
+    const resolved = path.isAbsolute(file) ? file : path.resolve(directory, file);
+    return util.normalizePath(resolved, { normCase: 'never', normUnicode: 'platform' });
+}
+
 export function compileCommandFilePath(entry: {directory: string; file: string}): string {
-    return util.platformNormalizePath(path.isAbsolute(entry.file) ? entry.file : path.resolve(entry.directory, entry.file));
+    return util.platformNormalizePath(normalizeCompileCommandPath(entry.directory, entry.file));
 }
 
 function arrayEquals<T>(left: readonly T[] | undefined, right: readonly T[] | undefined): boolean {
@@ -90,11 +95,11 @@ function preprocessArguments(args: readonly string[]): string[] {
 
 function compileCommandFromRaw(raw: RawCompileCommand): CompileCommand {
     const args = raw.arguments ? raw.arguments : raw.command ? [...shlex.splitCommandLine(raw.command)] : [];
-    const directory = util.platformNormalizePath(raw.directory);
+    const directory = util.normalizePath(raw.directory, { normCase: 'never', normUnicode: 'platform' });
     return {
         directory,
-        file: compileCommandFilePath({directory, file: raw.file}),
-        output: raw.output ? compileCommandFilePath({directory, file: raw.output}) : undefined,
+        file: normalizeCompileCommandPath(directory, raw.file),
+        output: raw.output ? normalizeCompileCommandPath(directory, raw.output) : undefined,
         arguments: preprocessArguments(args)
     };
 }

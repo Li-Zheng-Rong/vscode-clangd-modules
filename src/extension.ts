@@ -83,6 +83,11 @@ export async function activate(context: vscode.ExtensionContext):
         }
         cmakeProjectManager?.shutdownClangd();
       }));
+  context.subscriptions.push(
+      vscode.commands.registerCommand('clangd.refreshGeneratedCompileCommands', async () => {
+        const manager = await ensureCMakeProjectManager();
+        await manager.refreshGeneratedCompileCommands();
+      }));
 
   let shouldCheck = false;
 

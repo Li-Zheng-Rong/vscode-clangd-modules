@@ -21,6 +21,7 @@ export interface CompilationDatabaseScanDepsManagerOptions {
     globalStoragePath?: string;
     outputChannel?: vscode.OutputChannel;
     toolchain?: string;
+    modulesEnabled?: boolean;
 }
 
 async function readTextIfExists(filePath: string): Promise<string | undefined> {
@@ -169,11 +170,18 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         return this.writeGeneratedCompileCommands(false);
     }
 
-    private async refreshCdb(forceRewrite = false): Promise<boolean> {
+    async refreshCdb(forceRewrite = false): Promise<boolean> {
         const nextDatabase = await CompilationDatabase.fromFilePaths([this.compilationDatabasePath]) ?? new CompilationDatabase([]);
         const update = this.database.replaceWith(nextDatabase);
         for (const file of update.removed)
             this.moduleDepsByFile.delete(file);
+
+        if (this.options.modulesEnabled === false) {
+            this.moduleDepsByFile.clear();
+            return update.changed.length > 0 || update.removed.length > 0 || forceRewrite
+                ? this.writeGeneratedCompileCommands(forceRewrite)
+                : false;
+        }
 
         await Promise.all(update.changed.map(entry => this.scanAndUpdate(entry)));
         return update.changed.length > 0 || update.removed.length > 0 || forceRewrite
@@ -183,6 +191,11 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
 
     private async scanAndUpdate(entry: CompileCommand): Promise<void> {
         const file = compileCommandFilePath(entry);
+        if (this.options.modulesEnabled === false) {
+            this.moduleDepsByFile.delete(file);
+            return;
+        }
+
         const result = await scanEntry(entry);
         if (result)
             this.moduleDepsByFile.set(file, result);

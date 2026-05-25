@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import {BaseLanguageClient} from 'vscode-languageclient';
 import {CMakeToolsApi, getCMakeToolsApi, Project, Version} from 'vscode-cmake-tools';
 
+import * as config from './config';
 import {createLogger} from './logging';
 import {CompilationDatabaseScanDepsManager} from './scan-deps';
 
@@ -29,17 +30,22 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   static async create(globalStoragePath: string,
                       outputChannel: vscode.OutputChannel): Promise<CMakeActiveProjectManager> {
     const api = await getCMakeToolsApi(Version.latest);
-    if (!api)
+    if (!api) {
       log.warning('CMake Tools API is not available.');
+      void vscode.window.showWarningMessage(
+          'CMake Tools API is not available. clangd modules support requires the CMake Tools extension.');
+    }
 
-    const manager = new CMakeActiveProjectManager(api, globalStoragePath, outputChannel);
+    const manager = new CMakeActiveProjectManager(
+        api, globalStoragePath, outputChannel, await config.get<boolean>('modules.enabled'));
     await manager.activate();
     return manager;
   }
 
   private constructor(private readonly api: CMakeToolsApi|undefined,
                       private readonly globalStoragePath: string,
-                      private readonly outputChannel: vscode.OutputChannel) {}
+                      private readonly outputChannel: vscode.OutputChannel,
+                      private modulesEnabled: boolean) {}
 
   get state(): ActiveCMakeProjectState|undefined { return this.activeState; }
 
@@ -101,6 +107,12 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
     await this.cdbManager?.restartClangd();
   }
 
+  async refreshGeneratedCompileCommands(): Promise<boolean> {
+    this.modulesEnabled = await config.get<boolean>('modules.enabled');
+    this.cdbManager?.setOptions({modulesEnabled: this.modulesEnabled});
+    return await this.cdbManager?.refreshCdb(true) ?? false;
+  }
+
   shutdownClangd(): void {
     this.cdbManager?.shutdownClangd();
   }
@@ -132,6 +144,7 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
           globalStoragePath: this.globalStoragePath,
           outputChannel: this.outputChannel,
           toolchain: this.toolchainForProject(this.activeState.project),
+          modulesEnabled: this.modulesEnabled,
         });
     this.cdbManagerClientSubscription = this.cdbManager.onDidChangeClient(
         client => { this.onDidChangeClientEmitter.fire(client); });

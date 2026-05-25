@@ -1,5 +1,8 @@
 import * as path from 'path';
+import * as vscode from 'vscode';
+import {BaseLanguageClient} from 'vscode-languageclient';
 
+import {ClangdContext} from '../clangd-context';
 import {CompilationDatabase, CompileCommand, compileCommandFilePath} from '../compilation-database';
 import {Environment} from '../environment-variables';
 import {createLogger} from '../logging';
@@ -14,8 +17,9 @@ import {isClangClToolchain, isMsvcToolchain} from './util';
 const log = createLogger('scan-deps-cdb-manager');
 
 export interface CompilationDatabaseScanDepsManagerOptions {
+    globalStoragePath?: string;
+    outputChannel?: vscode.OutputChannel;
     toolchain?: string;
-    restart?: (cdbPath: string, environment?: Environment) => Promise<void> | void;
 }
 
 async function readTextIfExists(filePath: string): Promise<string | undefined> {
@@ -26,14 +30,22 @@ async function readTextIfExists(filePath: string): Promise<string | undefined> {
     }
 }
 
-export class CompilationDatabaseScanDepsManager {
+export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
+    private readonly onDidChangeClientEmitter = new vscode.EventEmitter<BaseLanguageClient | undefined>();
     private database: CompilationDatabase = new CompilationDatabase([]);
+    private clangdContext: ClangdContext | null = null;
     private readonly moduleDepsByFile = new Map<string, FileModuleImportExportEntries>();
 
+    readonly onDidChangeClient = this.onDidChangeClientEmitter.event;
+
     constructor(private readonly compilationDatabasePath: string,
-                private options: CompilationDatabaseScanDepsManagerOptions = {}) {}
+                private options: CompilationDatabaseScanDepsManagerOptions = {}) {
+        void this.refreshCdb(true);
+    }
 
     get compilationDatabase(): CompilationDatabase { return this.database; }
+
+    get client(): BaseLanguageClient | undefined { return this.clangdContext?.client; }
 
     get buildDirectory(): string { return path.dirname(this.compilationDatabasePath); }
 
@@ -59,23 +71,19 @@ export class CompilationDatabaseScanDepsManager {
             return false;
 
         await this.scanAndUpdate(entry);
-        return this.writeGeneratedCompileCommands();
+        return this.writeGeneratedCompileCommands(false);
     }
 
-    async refreshCdb(): Promise<boolean> {
+    async refreshCdb(forceRewrite = false): Promise<boolean> {
         const nextDatabase = await CompilationDatabase.fromFilePaths([this.compilationDatabasePath]) ?? new CompilationDatabase([]);
-        if (nextDatabase.entries().length === 0) {
-            const hadState = this.database.entries().length > 0 || this.moduleDepsByFile.size > 0;
-            this.clear();
-            return hadState ? this.writeGeneratedCompileCommands() : false;
-        }
-
         const update = this.database.replaceWith(nextDatabase);
         for (const file of update.removed)
             this.moduleDepsByFile.delete(file);
 
         await Promise.all(update.changed.map(entry => this.scanAndUpdate(entry)));
-        return update.changed.length > 0 || update.removed.length > 0 ? this.writeGeneratedCompileCommands() : false;
+        return update.changed.length > 0 || update.removed.length > 0 || forceRewrite
+            ? this.writeGeneratedCompileCommands(forceRewrite)
+            : false;
     }
 
     private async scanAndUpdate(entry: CompileCommand): Promise<void> {
@@ -87,10 +95,10 @@ export class CompilationDatabaseScanDepsManager {
             this.moduleDepsByFile.delete(file);
     }
 
-    private async writeGeneratedCompileCommands(): Promise<boolean> {
+    private async writeGeneratedCompileCommands(forceRewrite: boolean): Promise<boolean> {
         const generated = await buildGeneratedCompileCommands(this.database, this.moduleDeps());
         const content = JSON.stringify(generated.commands, undefined, 2);
-        if (await readTextIfExists(this.generatedCompileCommandsPath) === content)
+        if (!forceRewrite && await readTextIfExists(this.generatedCompileCommandsPath) === content)
             return false;
 
         await fs.mkdir_p(path.dirname(this.generatedCompileCommandsPath));
@@ -98,9 +106,43 @@ export class CompilationDatabaseScanDepsManager {
         log.info(`Updated generated clangd compile database: ${this.generatedCompileCommandsPath}`);
         for (const diagnostic of generated.diagnostics)
             log.warning(diagnostic);
-        await this.options.restart?.(this.generatedCompileCommandsPath, await this.visualStudioEnvironmentForToolchain());
+        await this.restartClangd();
         return true;
     }
+
+    async restartClangd(): Promise<void> {
+        if (this.clangdContext?.clientIsStarting())
+            return;
+
+        this.clangdContext?.dispose();
+        if (!this.options.globalStoragePath || !this.options.outputChannel) {
+            this.clangdContext = null;
+            this.onDidChangeClientEmitter.fire(undefined);
+            return;
+        }
+
+        this.clangdContext = await ClangdContext.create(
+            this.options.globalStoragePath,
+            this.options.outputChannel,
+            {
+                compileCommandsDir: this.generatedCompileCommandsDir,
+                environment: await this.visualStudioEnvironmentForToolchain(),
+            });
+        this.onDidChangeClientEmitter.fire(this.client);
+    }
+
+    shutdownClangd(): void {
+        if (this.clangdContext?.clientIsStarting())
+            return;
+
+        this.clangdContext?.dispose();
+        this.clangdContext = null;
+        this.onDidChangeClientEmitter.fire(undefined);
+    }
+
+    clientIsStarting(): boolean { return this.clangdContext?.clientIsStarting() ?? false; }
+
+    clientIsRunning(): boolean { return this.clangdContext?.clientIsRunning() ?? false; }
 
     private async visualStudioEnvironmentForToolchain(): Promise<Environment | undefined> {
         const toolchain = this.options.toolchain;
@@ -110,9 +152,9 @@ export class CompilationDatabaseScanDepsManager {
         return varsForMsvcToolchain(toolchain);
     }
 
-    private clear(): void {
-        this.database = new CompilationDatabase([]);
-        this.moduleDepsByFile.clear();
+    dispose(): void {
+        this.shutdownClangd();
+        this.onDidChangeClientEmitter.dispose();
     }
 
 }

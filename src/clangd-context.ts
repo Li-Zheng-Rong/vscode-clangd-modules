@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 import * as vscodelc from 'vscode-languageclient/node';
 
@@ -11,11 +10,9 @@ import * as inlayHints from './inlay-hints';
 import * as install from './install';
 import * as memoryUsage from './memory-usage';
 import * as openConfig from './open-config';
-import {EnvironmentUtils, Environment} from './environment-variables';
-import {activeCMakeBuildDirectory, activeCMakeCodeModel, generatedCompileCommandsDir} from './generate-cdb';
+import {Environment, EnvironmentUtils} from './environment-variables';
 import * as switchSourceHeader from './switch-source-header';
 import * as typeHierarchy from './type-hierarchy';
-import {varsForMsvcToolchain} from './visual-studio';
 
 export const clangdDocumentSelector = [
   {scheme: 'file', language: 'c'},
@@ -27,6 +24,11 @@ export const clangdDocumentSelector = [
 
 export function isClangdDocument(document: vscode.TextDocument) {
   return vscode.languages.match(clangdDocumentSelector, document);
+}
+
+export interface ClangdContextOptions {
+  compileCommandsDir?: string;
+  environment?: Environment;
 }
 
 class ClangdLanguageClient extends vscodelc.LanguageClient {
@@ -60,29 +62,13 @@ class EnableEditsNearCursorFeature implements vscodelc.StaticFeature {
   clear() {}
 }
 
-function isMsvcLikeToolchain(toolchainPath: string): boolean {
-  return /^(?:cl|clang-cl)(?:\.exe)?$/i.test(path.basename(toolchainPath));
-}
-
-async function visualStudioEnvironmentForActiveToolchain(): Promise<Environment|undefined> {
-  const codeModel = await activeCMakeCodeModel();
-  for (const toolchain of codeModel?.toolchains?.values() ?? []) {
-    if (!isMsvcLikeToolchain(toolchain.path))
-      continue;
-
-    const environment = await varsForMsvcToolchain(toolchain.path);
-    if (environment)
-      return environment;
-  }
-  return undefined;
-}
-
 export class ClangdContext implements vscode.Disposable {
   subscriptions: vscode.Disposable[];
   client: ClangdLanguageClient;
 
   static async create(globalStoragePath: string,
-                      outputChannel: vscode.OutputChannel):
+                      outputChannel: vscode.OutputChannel,
+                      options: ClangdContextOptions = {}):
       Promise<ClangdContext|null> {
     const subscriptions: vscode.Disposable[] = [];
     const clangdPath = await install.activate(subscriptions, globalStoragePath);
@@ -92,24 +78,22 @@ export class ClangdContext implements vscode.Disposable {
     }
 
     return new ClangdContext(subscriptions, await ClangdContext.createClient(
-                                                clangdPath, outputChannel));
+                                                clangdPath, outputChannel, options));
   }
 
   private static async createClient(clangdPath: string,
-                                    outputChannel: vscode.OutputChannel):
+                                    outputChannel: vscode.OutputChannel,
+                                    options: ClangdContextOptions):
       Promise<ClangdLanguageClient> {
     const useScriptAsExecutable =
         await config.get<boolean>('useScriptAsExecutable');
     let clangdArguments = await config.get<string[]>('arguments');
-    if (await config.get<boolean>('modules.enabled')) {
-      const buildDirectory = await activeCMakeBuildDirectory();
-      if (buildDirectory) {
-        clangdArguments = [
-          ...clangdArguments,
-          `--compile-commands-dir=${generatedCompileCommandsDir(buildDirectory)}`,
-          '--experimental-modules-support',
-        ];
-      }
+    if (options.compileCommandsDir) {
+      clangdArguments = [
+        ...clangdArguments,
+        `--compile-commands-dir=${options.compileCommandsDir}`,
+        '--experimental-modules-support',
+      ];
     }
     if (useScriptAsExecutable) {
       let quote = (str: string) => { return `"${str}"`; };
@@ -126,13 +110,12 @@ export class ClangdContext implements vscode.Disposable {
         shell: useScriptAsExecutable
       }
     };
-    const visualStudioEnvironment = await visualStudioEnvironmentForActiveToolchain();
     const traceFile = await config.get<string>('trace');
     const trace = traceFile ? {CLANGD_TRACE: traceFile} : undefined;
-    if (visualStudioEnvironment || trace) {
+    if (options.environment || trace) {
       clangd.options = {
         ...clangd.options,
-        env: EnvironmentUtils.merge([process.env, visualStudioEnvironment, trace]),
+        env: EnvironmentUtils.merge([process.env, options.environment, trace]),
       };
     }
     const serverOptions: vscodelc.ServerOptions = clangd;

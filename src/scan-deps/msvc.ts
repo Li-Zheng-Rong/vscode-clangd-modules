@@ -1,30 +1,14 @@
 import * as path from 'path';
 
-import {CompilationDatabase, CompileCommand} from '../compilation-database';
+import {CompileCommand} from '../compilation-database';
 import {Environment} from '../environment-variables';
 import {fs} from '../pr';
 import * as proc from '../proc';
 import * as util from '../util';
 import {varsForMsvcToolchain} from '../visual-studio';
 
-import type {FileModuleImportExportEntries, ModuleImportExportEntry} from './index';
-import {collectScanResults, commandArguments, modulePcmPath, normalizePath, resolveCommandPath, stableHash} from './util';
-
-interface MsvcScanDepsModuleEntry {
-    'logical-name': string;
-    'source-path'?: string;
-    'is-interface'?: boolean;
-}
-
-interface MsvcScanDepsRule {
-    'primary-output': string;
-    provides?: MsvcScanDepsModuleEntry[];
-    requires?: MsvcScanDepsModuleEntry[];
-}
-
-interface MsvcScanDepsP1689Output {
-    rules?: MsvcScanDepsRule[];
-}
+import type {ModuleScanResult} from './index';
+import {collectModuleScanResult, commandArguments, compilerPath, normalizePath, resolveCommandPath, ScanDepsModuleEntry, ScanDepsOutput, stableHash} from './util';
 
 function optionValue(args: readonly string[], index: number, ...options: string[]): {value?: string; nextIndex: number} | undefined {
     const arg = args[index];
@@ -52,11 +36,6 @@ function outputFromArguments(args: readonly string[]): string | undefined {
 
 function compileCommandOutput(entry: CompileCommand): string | undefined {
     return entry.output ?? outputFromArguments(commandArguments(entry));
-}
-
-function compileCommandOutputs(entry: CompileCommand): string[] {
-    const outputs = [entry.output, outputFromArguments(commandArguments(entry))].filter((output): output is string => !!output);
-    return outputs;
 }
 
 function isSourceArgument(entry: CompileCommand, arg: string): boolean {
@@ -106,7 +85,7 @@ async function runMsvcScanDeps(
     entry: CompileCommand,
     temporaryDirectory: string,
     environment: Environment | undefined,
-): Promise<MsvcScanDepsP1689Output | undefined> {
+): Promise<ScanDepsOutput<ScanDepsModuleEntry> | undefined> {
     const args = commandArguments(entry);
     const compiler = args[0];
     const output = compileCommandOutput(entry);
@@ -133,34 +112,23 @@ async function runMsvcScanDeps(
         throw new Error(`MSVC dependency scan failed with code ${execution.retc}: ${execution.stderr}`);
 
     try {
-        return JSON.parse((await fs.readFile(scanOutputPath)).toString()) as MsvcScanDepsP1689Output;
+        return JSON.parse((await fs.readFile(scanOutputPath)).toString()) as ScanDepsOutput<ScanDepsModuleEntry>;
     } catch (error) {
         throw new Error(`Failed to parse MSVC dependency scan output: ${util.errorToString(error)}`);
     }
 }
 
-function toModuleEntry(
-    entry: MsvcScanDepsModuleEntry,
-    buildDirectory: string,
-    fallbackSourcePath: string | undefined,
-): ModuleImportExportEntry {
-    const sourcePath = entry['source-path'] ? normalizePath(entry['source-path']) : fallbackSourcePath;
-    return {
-        logicalName: entry['logical-name'],
-        ...(sourcePath ? {sourcePath} : {}),
-        ...(fallbackSourcePath ? {pcmPath: modulePcmPath(buildDirectory, entry['logical-name'], sourcePath ?? fallbackSourcePath)} : {}),
-    };
-}
+export async function scan(
+    entry: CompileCommand,
+): Promise<ModuleScanResult | undefined> {
+    const toolchainPath = compilerPath(entry);
+    if (!toolchainPath)
+        return undefined;
 
-export async function scan(compilationDatabasePath: string, toolchainPath: string): Promise<FileModuleImportExportEntries[]> {
-    const database = await CompilationDatabase.fromFilePaths([compilationDatabasePath]);
-    if (!database)
-        return [];
-
-    const temporaryDirectory = path.join(path.dirname(compilationDatabasePath), '.clangd', 'scan-deps', 'msvc');
+    const buildDirectory = entry.directory;
+    const temporaryDirectory = path.join(buildDirectory, '.clangd', 'scan-deps', 'msvc');
     await fs.mkdir_p(temporaryDirectory);
     const environment = await varsForMsvcToolchain(toolchainPath);
-    const scanDepsOutputs = (await Promise.all(database.entries().map(entry => runMsvcScanDeps(entry, temporaryDirectory, environment))))
-        .filter((output): output is MsvcScanDepsP1689Output => !!output);
-    return collectScanResults(scanDepsOutputs, database, path.dirname(compilationDatabasePath), compileCommandOutputs, toModuleEntry);
+    const scanDepsOutput = await runMsvcScanDeps(entry, temporaryDirectory, environment);
+    return scanDepsOutput ? collectModuleScanResult(scanDepsOutput, buildDirectory, resolveCommandPath(entry, entry.file)) : undefined;
 }

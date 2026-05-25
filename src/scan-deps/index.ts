@@ -1,68 +1,58 @@
-import * as path from 'path';
-
-import type {CodeModel} from 'vscode-cmake-tools';
-
-import {varsForMsvcToolchain} from '../visual-studio';
+import {CompilationDatabase, CompileCommand} from '../compilation-database';
 
 import {scan as scanClang} from './clang';
 import {scan as scanGcc} from './gcc';
 import {scan as scanMsvc} from './msvc';
+import {clangScanDepsPathForToolchain, compilerPath, isGccToolchain, isMsvcToolchain, resolveCommandPath} from './util';
 
-export interface ModuleImportExportEntry {
+export interface ModuleExportEntry {
+    logicalName: string;
+    sourcePath: string;
+    pcmPath: string;
+}
+
+export interface ModuleImportEntry {
     logicalName: string;
     sourcePath?: string;
-    pcmPath?: string;
 }
 
 export interface FileModuleImportExportEntries {
     file: string;
-    exports: ModuleImportExportEntry[];
-    imports: ModuleImportExportEntry[];
+    exports: ModuleExportEntry[];
+    imports: ModuleImportEntry[];
 }
 
-function clangScanDepsNameForToolchain(name: string): string | undefined {
-    const match = /^(?:(.+)-)?clang(?:\+\+|-cl)?(\.exe)?$/i.exec(name);
-    if (!match)
+export interface ModuleScanResult {
+    exports: ModuleExportEntry[];
+    imports: ModuleImportEntry[];
+}
+
+async function scanEntry(
+    entry: CompileCommand,
+): Promise<FileModuleImportExportEntries | undefined> {
+    const compiler = compilerPath(entry);
+    if (!compiler)
         return undefined;
-    return `${match[1] ? `${match[1]}-` : ''}clang-scan-deps${match[2] ?? ''}`;
+
+    let scanResult: ModuleScanResult | undefined;
+    const clangScanDepsPath = clangScanDepsPathForToolchain(compiler);
+    if (clangScanDepsPath)
+        scanResult = await scanClang(entry);
+    else if (isGccToolchain(compiler))
+        scanResult = await scanGcc(entry);
+    else if (isMsvcToolchain(compiler))
+        scanResult = await scanMsvc(entry);
+
+    return scanResult ? {file: resolveCommandPath(entry, entry.file), ...scanResult} : undefined;
 }
 
-function clangScanDepsPathForToolchain(toolchainPath: string): string | undefined {
-    const scanDepsName = clangScanDepsNameForToolchain(path.basename(toolchainPath));
-    if (!scanDepsName)
-        return undefined;
+export async function scan(compilationDatabasePath: string): Promise<FileModuleImportExportEntries[]> {
+    const database = await CompilationDatabase.fromFilePaths([compilationDatabasePath]);
+    if (!database)
+        return [];
 
-    return path.join(path.dirname(toolchainPath), scanDepsName);
-}
-
-function isGccToolchain(toolchainPath: string): boolean {
-    return /^(?:(.+)-)?(?:gcc|g\+\+|cc|c\+\+)(?:\.exe)?$/i.test(path.basename(toolchainPath));
-}
-
-function isClangClToolchain(toolchainPath: string): boolean {
-    return /^(?:(.+)-)?clang-cl(?:\.exe)?$/i.test(path.basename(toolchainPath));
-}
-
-function isMsvcToolchain(toolchainPath: string): boolean {
-    return /^cl(?:\.exe)?$/i.test(path.basename(toolchainPath));
-}
-
-export async function scan(
-    compilationDatabasePath: string,
-    codeModel: CodeModel.Content | null | undefined,
-): Promise<FileModuleImportExportEntries[]> {
-    for (const toolchain of codeModel?.toolchains?.values() ?? []) {
-        const clangScanDepsPath = clangScanDepsPathForToolchain(toolchain.path);
-        if (clangScanDepsPath) {
-            const environment = isClangClToolchain(toolchain.path) ? await varsForMsvcToolchain(toolchain.path) : undefined;
-            return scanClang(compilationDatabasePath, clangScanDepsPath, environment);
-        }
-        if (isGccToolchain(toolchain.path))
-            return scanGcc(compilationDatabasePath);
-        if (isMsvcToolchain(toolchain.path))
-            return scanMsvc(compilationDatabasePath, toolchain.path);
-    }
-    return [];
+    return (await Promise.all(database.entries().map(entry => scanEntry(entry))))
+        .filter((result): result is FileModuleImportExportEntries => !!result);
 }
 
 export {scanClang};

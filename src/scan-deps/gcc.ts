@@ -1,27 +1,12 @@
 import * as path from 'path';
 
-import {CompilationDatabase, CompileCommand} from '../compilation-database';
+import {CompileCommand} from '../compilation-database';
 import {fs} from '../pr';
 import * as proc from '../proc';
 import * as util from '../util';
 
-import type {FileModuleImportExportEntries, ModuleImportExportEntry} from './index';
-import {collectScanResults, commandArguments, modulePcmPath, normalizePath, resolveCommandPath, stableHash} from './util';
-
-interface GccScanDepsModuleEntry {
-    'logical-name': string;
-    'is-interface'?: boolean;
-}
-
-interface GccScanDepsRule {
-    'primary-output': string;
-    provides?: GccScanDepsModuleEntry[];
-    requires?: GccScanDepsModuleEntry[];
-}
-
-interface GccScanDepsP1689Output {
-    rules?: GccScanDepsRule[];
-}
+import type {ModuleScanResult} from './index';
+import {collectModuleScanResult, commandArguments, normalizePath, resolveCommandPath, ScanDepsModuleEntry, ScanDepsOutput, stableHash} from './util';
 
 function outputFromArguments(args: readonly string[]): string | undefined {
     for (let index = 0; index < args.length; index++) {
@@ -36,13 +21,6 @@ function outputFromArguments(args: readonly string[]): string | undefined {
 
 function compileCommandOutput(entry: CompileCommand): string | undefined {
     return entry.output ?? outputFromArguments(commandArguments(entry));
-}
-
-function compileCommandOutputs(entry: CompileCommand): string[] {
-    const output = compileCommandOutput(entry);
-    if (!output)
-        return [];
-    return [output];
 }
 
 function optionValue(args: readonly string[], index: number, ...options: string[]): {nextIndex: number} | undefined {
@@ -90,7 +68,7 @@ function filteredScanArguments(entry: CompileCommand): string[] {
 async function runGccScanDeps(
     entry: CompileCommand,
     temporaryDirectory: string,
-): Promise<GccScanDepsP1689Output | undefined> {
+): Promise<ScanDepsOutput<ScanDepsModuleEntry> | undefined> {
     const args = commandArguments(entry);
     const compiler = args[0];
     const output = compileCommandOutput(entry);
@@ -125,31 +103,18 @@ async function runGccScanDeps(
         throw new Error(`g++ dependency scan failed with code ${execution.retc}: ${execution.stderr}`);
 
     try {
-        return JSON.parse((await fs.readFile(ddiPath)).toString()) as GccScanDepsP1689Output;
+        return JSON.parse((await fs.readFile(ddiPath)).toString()) as ScanDepsOutput<ScanDepsModuleEntry>;
     } catch (error) {
         throw new Error(`Failed to parse g++ dependency scan output: ${util.errorToString(error)}`);
     }
 }
 
-function toModuleEntry(
-    entry: GccScanDepsModuleEntry,
-    buildDirectory: string,
-    sourcePath: string | undefined,
-): ModuleImportExportEntry {
-    return {
-        logicalName: entry['logical-name'],
-        ...(sourcePath ? {sourcePath, pcmPath: modulePcmPath(buildDirectory, entry['logical-name'], sourcePath)} : {}),
-    };
-}
-
-export async function scan(compilationDatabasePath: string): Promise<FileModuleImportExportEntries[]> {
-    const database = await CompilationDatabase.fromFilePaths([compilationDatabasePath]);
-    if (!database)
-        return [];
-
-    const temporaryDirectory = path.join(path.dirname(compilationDatabasePath), '.clangd', 'scan-deps', 'gcc');
+export async function scan(
+    entry: CompileCommand,
+): Promise<ModuleScanResult | undefined> {
+    const buildDirectory = entry.directory;
+    const temporaryDirectory = path.join(buildDirectory, '.clangd', 'scan-deps', 'gcc');
     await fs.mkdir_p(temporaryDirectory);
-    const scanDepsOutputs = (await Promise.all(database.entries().map(entry => runGccScanDeps(entry, temporaryDirectory))))
-        .filter((output): output is GccScanDepsP1689Output => !!output);
-    return collectScanResults(scanDepsOutputs, database, path.dirname(compilationDatabasePath), compileCommandOutputs, toModuleEntry);
+    const scanDepsOutput = await runGccScanDeps(entry, temporaryDirectory);
+    return scanDepsOutput ? collectModuleScanResult(scanDepsOutput, buildDirectory, resolveCommandPath(entry, entry.file)) : undefined;
 }

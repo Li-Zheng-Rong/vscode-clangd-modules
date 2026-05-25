@@ -4,6 +4,7 @@
 
 import * as util from './util';
 import * as path from 'path';
+import * as nodefs from 'fs';
 import { fs } from './pr';
 import { Environment, EnvironmentUtils } from './environment-variables';
 import * as iconv from 'iconv-lite';
@@ -54,6 +55,14 @@ function normalizePath(filePath: string): string {
     return util.platformNormalizePath(filePath);
 }
 
+function normalizeExistingPath(filePath: string): string {
+    try {
+        return normalizePath(nodefs.realpathSync.native(filePath));
+    } catch {
+        return normalizePath(filePath);
+    }
+}
+
 function msvcToolchainParts(toolchainPath: string): {hostArch: string; targetArch: string; toolsetVersion?: string} {
     const parts = normalizePath(toolchainPath).split('/');
     const msvcIndex = parts.findIndex(part => part.toLowerCase() === 'msvc');
@@ -69,7 +78,7 @@ function msvcToolchainParts(toolchainPath: string): {hostArch: string; targetArc
 }
 
 export async function varsForMsvcToolchain(toolchainPath: string): Promise<Environment | undefined> {
-    const normalizedToolchain = normalizePath(toolchainPath);
+    const normalizedToolchain = normalizeExistingPath(toolchainPath);
     for (const installation of await vsInstallations()) {
         if (!normalizedToolchain.startsWith(normalizePath(installation.installationPath)))
             continue;

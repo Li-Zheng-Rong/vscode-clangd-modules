@@ -1,6 +1,6 @@
 import { CompileCommand, CompilationDatabase } from "./compilation-database";
 import * as shlex from "./shlex";
-import type { FileModuleImportExportEntries, ModuleImportExportEntry } from "./scan-deps";
+import type { FileModuleImportExportEntries, ModuleExportEntry, ModuleImportEntry } from "./scan-deps";
 import * as util from "./util";
 
 interface ModuleRef {
@@ -98,7 +98,7 @@ function buildScanDepsByFile(scanDeps: readonly FileModuleImportExportEntries[],
     return result;
 }
 
-function moduleKey(module: ModuleImportExportEntry): string {
+function moduleKey(module: ModuleExportEntry | ModuleImportEntry): string {
     return `${module.logicalName}\0${module.sourcePath ?? ""}`;
 }
 
@@ -125,7 +125,7 @@ function buildProvidedModules(scanDeps: readonly FileModuleImportExportEntries[]
     return providedModules;
 }
 
-function resolveImportedModule(imported: ModuleImportExportEntry, providedModules: ProvidedModules, diagnostics?: string[]): ModuleRef | undefined {
+function resolveImportedModule(imported: ModuleImportEntry, providedModules: ProvidedModules, diagnostics?: string[]): ModuleRef | undefined {
     const exact = providedModules.byKey.get(moduleKey(imported));
     if (exact)
         return exact;

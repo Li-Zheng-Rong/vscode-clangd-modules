@@ -1,14 +1,16 @@
 import * as crypto from 'crypto';
 import * as path from 'path';
 
-import {CompilationDatabase, CompileCommand} from '../compilation-database';
+import {CompileCommand} from '../compilation-database';
 import * as shlex from '../shlex';
 import * as baseUtil from '../util';
 
-import type {FileModuleImportExportEntries, ModuleImportExportEntry} from './index';
+import type {ModuleExportEntry, ModuleImportEntry, ModuleScanResult} from './index';
 
 export interface ScanDepsModuleEntry {
     'logical-name': string;
+    'source-path'?: string;
+    'is-interface'?: boolean;
 }
 
 export interface ScanDepsRule<Entry extends ScanDepsModuleEntry> {
@@ -20,12 +22,6 @@ export interface ScanDepsRule<Entry extends ScanDepsModuleEntry> {
 export interface ScanDepsOutput<Entry extends ScanDepsModuleEntry> {
     rules?: ScanDepsRule<Entry>[];
 }
-
-export type ModuleEntryMapper<Entry extends ScanDepsModuleEntry> = (
-    entry: Entry,
-    buildDirectory: string,
-    fallbackSourcePath: string | undefined,
-) => ModuleImportExportEntry;
 
 export function normalizePath(filePath: string): string {
     return baseUtil.platformNormalizePath(filePath);
@@ -40,6 +36,37 @@ export function commandArguments(entry: CompileCommand): string[] {
     return entry.arguments ?? [...shlex.splitCommandLine(entry.command)];
 }
 
+export function compilerPath(entry: CompileCommand): string | undefined {
+    return commandArguments(entry)[0];
+}
+
+export function clangScanDepsNameForToolchain(name: string): string | undefined {
+    const match = /^(?:(.+)-)?clang(?:\+\+|-cl)?(\.exe)?$/i.exec(name);
+    if (!match)
+        return undefined;
+    return `${match[1] ? `${match[1]}-` : ''}clang-scan-deps${match[2] ?? ''}`;
+}
+
+export function clangScanDepsPathForToolchain(toolchainPath: string): string | undefined {
+    const scanDepsName = clangScanDepsNameForToolchain(path.basename(toolchainPath));
+    if (!scanDepsName)
+        return undefined;
+
+    return path.join(path.dirname(toolchainPath), scanDepsName);
+}
+
+export function isGccToolchain(toolchainPath: string): boolean {
+    return /^(?:(.+)-)?(?:gcc|g\+\+|cc|c\+\+)(?:\.exe)?$/i.test(path.basename(toolchainPath));
+}
+
+export function isClangClToolchain(toolchainPath: string): boolean {
+    return /^(?:(.+)-)?clang-cl(?:\.exe)?$/i.test(path.basename(toolchainPath));
+}
+
+export function isMsvcToolchain(toolchainPath: string): boolean {
+    return /^cl(?:\.exe)?$/i.test(path.basename(toolchainPath));
+}
+
 export function stableHash(value: string): string {
     return crypto.createHash('sha256').update(value).digest('hex').substring(0, 16);
 }
@@ -49,50 +76,37 @@ export function modulePcmPath(buildDirectory: string, logicalName: string, sourc
     return normalizePath(path.join(buildDirectory, '.clangd', 'modules', `${encodeURIComponent(logicalName)}-${stableHash(sourceKey)}.pcm`));
 }
 
-export function buildOutputLookup(
-    database: CompilationDatabase,
-    outputsForEntry: (entry: CompileCommand) => readonly string[],
-): Map<string, CompileCommand> {
-    const result = new Map<string, CompileCommand>();
-    for (const entry of database.entries())
-        for (const output of outputsForEntry(entry))
-            result.set(resolveCommandPath(entry, output), entry);
-    return result;
+function moduleSourcePath(entry: ScanDepsModuleEntry, fallbackSourcePath: string): string {
+    return entry['source-path'] ? normalizePath(entry['source-path']) : fallbackSourcePath;
 }
 
-export function commandForPrimaryOutput(
-    database: CompilationDatabase,
-    commandsByOutput: Map<string, CompileCommand>,
-    primaryOutput: string,
-): CompileCommand | undefined {
-    if (path.isAbsolute(primaryOutput))
-        return commandsByOutput.get(normalizePath(primaryOutput));
-    for (const entry of database.entries()) {
-        const command = commandsByOutput.get(resolveCommandPath(entry, primaryOutput));
-        if (command)
-            return command;
-    }
-    return undefined;
+function moduleExportEntry(entry: ScanDepsModuleEntry, buildDirectory: string, fallbackSourcePath: string): ModuleExportEntry {
+    const sourcePath = moduleSourcePath(entry, fallbackSourcePath);
+    return {
+        logicalName: entry['logical-name'],
+        sourcePath,
+        pcmPath: modulePcmPath(buildDirectory, entry['logical-name'], sourcePath),
+    };
 }
 
-export function collectScanResults<Entry extends ScanDepsModuleEntry>(
-    scanDepsOutputs: readonly ScanDepsOutput<Entry>[],
-    database: CompilationDatabase,
+function moduleImportEntry(entry: ScanDepsModuleEntry): ModuleImportEntry {
+    return {
+        logicalName: entry['logical-name'],
+        ...(entry['source-path'] ? {sourcePath: normalizePath(entry['source-path'])} : {}),
+    };
+}
+
+export function collectModuleScanResult<Entry extends ScanDepsModuleEntry>(
+    scanDepsOutput: ScanDepsOutput<Entry>,
     buildDirectory: string,
-    outputsForEntry: (entry: CompileCommand) => readonly string[],
-    toModuleEntry: ModuleEntryMapper<Entry>,
-): FileModuleImportExportEntries[] {
-    const commandsByOutput = buildOutputLookup(database, outputsForEntry);
-    return scanDepsOutputs.flatMap(scanDepsOutput => (scanDepsOutput.rules ?? []).flatMap(rule => {
-        const command = commandForPrimaryOutput(database, commandsByOutput, rule['primary-output']);
-        if (!command)
-            return [];
+    exportSourcePath: string,
+): ModuleScanResult | undefined {
+    const rules = scanDepsOutput.rules ?? [];
+    if (!rules.length)
+        return undefined;
 
-        const file = resolveCommandPath(command, command.file);
-        return [{
-            file,
-            exports: (rule.provides ?? []).map(entry => toModuleEntry(entry, buildDirectory, file)),
-            imports: (rule.requires ?? []).map(entry => toModuleEntry(entry, buildDirectory, undefined)),
-        }];
-    }));
+    return {
+        exports: rules.flatMap(rule => (rule.provides ?? []).map(entry => moduleExportEntry(entry, buildDirectory, exportSourcePath))),
+        imports: rules.flatMap(rule => (rule.requires ?? []).map(moduleImportEntry)),
+    };
 }

@@ -56,10 +56,9 @@ export async function activeCMakeCodeModel(): Promise<CodeModel.Content | undefi
 export async function refreshGeneratedCompileCommandsAfterBuild(
     buildDirectory: string,
     database: CompilationDatabase,
-    codeModel: CodeModel.Content | undefined,
 ): Promise<boolean> {
     const databasePath = path.join(buildDirectory, 'compile_commands.json');
-    const moduleScanDeps = await scanCompilationDatabase(databasePath, codeModel);
+    const moduleScanDeps = await scanCompilationDatabase(databasePath);
     const generated = await buildGeneratedCompileCommandsFromCompilationDatabase(database, moduleScanDeps);
 
     const outPath = generatedCompileCommandsPath(buildDirectory);
@@ -110,7 +109,7 @@ async function refreshGeneratedCompileCommands(): Promise<void> {
         return;
     }
 
-    const changed = await refreshGeneratedCompileCommandsAfterBuild(buildDirectory, database, project.codeModel);
+    const changed = await refreshGeneratedCompileCommandsAfterBuild(buildDirectory, database);
     vscode.window.showInformationMessage(changed ? 'Generated compile commands refreshed.' : 'Generated compile commands are already up to date.');
 }
 

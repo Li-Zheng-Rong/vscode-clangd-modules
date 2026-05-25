@@ -10,6 +10,7 @@ import * as inlayHints from './inlay-hints';
 import * as install from './install';
 import * as memoryUsage from './memory-usage';
 import * as openConfig from './open-config';
+import {activeCMakeBuildDirectory, generatedCompileCommandsDir} from './generate-cdb';
 import * as switchSourceHeader from './switch-source-header';
 import * as typeHierarchy from './type-hierarchy';
 
@@ -80,6 +81,16 @@ export class ClangdContext implements vscode.Disposable {
     const useScriptAsExecutable =
         await config.get<boolean>('useScriptAsExecutable');
     let clangdArguments = await config.get<string[]>('arguments');
+    if (await config.get<boolean>('modules.enabled')) {
+      const buildDirectory = await activeCMakeBuildDirectory();
+      if (buildDirectory) {
+        clangdArguments = [
+          ...clangdArguments,
+          `--compile-commands-dir=${generatedCompileCommandsDir(buildDirectory)}`,
+          '--experimental-modules-support',
+        ];
+      }
+    }
     if (useScriptAsExecutable) {
       let quote = (str: string) => { return `"${str}"`; };
       clangdPath = quote(clangdPath)

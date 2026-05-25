@@ -113,6 +113,11 @@
                     },
                     "description": "Arguments for clangd server."
                 },
+                "clangd.modules.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable generated compile commands and clangd experimental C++ modules support."
+                },
                 "clangd.trace": {
                     "type": "string",
                     "description": "Names a file that clangd should log a performance trace to, in chrome trace-viewer JSON format."

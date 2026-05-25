@@ -27,8 +27,20 @@ async function readTextIfExists(filePath: string): Promise<string | undefined> {
     }
 }
 
-function activeProjectUri(): vscode.Uri | undefined {
-    return vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+function activeWorkspaceFolderUri(): vscode.Uri | undefined {
+    const activeDocumentUri = vscode.window.activeTextEditor?.document.uri;
+    const activeWorkspaceFolder = activeDocumentUri ? vscode.workspace.getWorkspaceFolder(activeDocumentUri) : undefined;
+    return activeWorkspaceFolder?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+}
+
+export async function activeCMakeBuildDirectory(): Promise<string | undefined> {
+    const api = await getCMakeToolsApi(Version.latest);
+    const uri = activeWorkspaceFolderUri();
+    if (!api || !uri)
+        return undefined;
+
+    const project = await api.getProject(uri);
+    return project?.getBuildDirectory();
 }
 
 export async function refreshGeneratedCompileCommandsAfterBuild(
@@ -63,7 +75,7 @@ async function refreshGeneratedCompileCommands(): Promise<void> {
         return;
     }
 
-    const uri = activeProjectUri();
+    const uri = activeWorkspaceFolderUri();
     if (!uri) {
         vscode.window.showWarningMessage('No active workspace or editor for CMake Tools project lookup.');
         return;

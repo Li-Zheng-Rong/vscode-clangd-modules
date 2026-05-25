@@ -127,6 +127,35 @@ function expandModuleInputs(inputs: readonly ModuleRef[], graph: ReadonlyMap<str
     return [...expanded.values()];
 }
 
+function optionValue(args: readonly string[], index: number, ...options: string[]): {nextIndex: number} | undefined {
+    const arg = args[index];
+    for (const option of options) {
+        if (arg === option)
+            return {nextIndex: index + 1};
+        if (arg.startsWith(`${option}=`))
+            return {nextIndex: index};
+    }
+    return undefined;
+}
+
+function filterGeneratedArguments(args: readonly string[]): string[] {
+    const filtered: string[] = [];
+    for (let index = 0; index < args.length; index++) {
+        const arg = args[index];
+        if (arg === '-fmodules-ts')
+            continue;
+
+        const option = optionValue(args, index, '-fdeps-format');
+        if (option) {
+            index = option.nextIndex;
+            continue;
+        }
+
+        filtered.push(arg);
+    }
+    return filtered;
+}
+
 function addModuleArgs(args: readonly string[], output: string | undefined, inputs: readonly ModuleRef[]): string[] {
     const moduleArgs = [
         ...(output ? ["-x", "c++-module", `-fmodule-output=${output}`] : []),
@@ -154,7 +183,7 @@ function buildCommand(
         directory: command.directory,
         file: command.file,
         ...(command.output ? { output: command.output } : {}),
-        arguments: addModuleArgs(command.arguments, output, inputs),
+        arguments: addModuleArgs(filterGeneratedArguments(command.arguments), output, inputs),
     };
 }
 

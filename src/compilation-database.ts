@@ -54,19 +54,13 @@ function compileCommandEquals(left: CompileCommand, right: CompileCommand): bool
         arrayEquals(left.arguments, right.arguments);
 }
 
-function optionValue(
-    args: readonly string[],
-    index: number,
-    ...options: string[]
-): { nextIndex: number } | undefined {
+function optionValue(args: readonly string[], index: number, ...options: string[]): {nextIndex: number} | undefined {
     const arg = args[index];
     for (const option of options) {
         if (arg === option)
-            return { nextIndex: index + 1 };
-
-        const prefix = `${option}=`;
-        if (arg.startsWith(prefix))
-            return { nextIndex: index };
+            return {nextIndex: index + 1};
+        if (arg.startsWith(`${option}=`))
+            return {nextIndex: index};
     }
     return undefined;
 }
@@ -77,17 +71,14 @@ function isModmapResponseArgument(argument: string): boolean {
 
 function preprocessArguments(args: readonly string[]): string[] {
     const filtered: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
+    for (let index = 0; index < args.length; index++) {
+        const arg = args[index];
         if (isModmapResponseArgument(arg))
             continue;
 
-        if (arg === '-fmodules-ts')
-            continue;
-
-        const moduleMapper = optionValue(args, i, '-fmodule-mapper', '-fdeps-format');
+        const moduleMapper = optionValue(args, index, '-fmodule-mapper');
         if (moduleMapper) {
-            i = moduleMapper.nextIndex;
+            index = moduleMapper.nextIndex;
             continue;
         }
 
@@ -103,7 +94,7 @@ function compileCommandFromRaw(raw: RawCompileCommand): CompileCommand {
         directory,
         file: normalizeCompileCommandPath(directory, raw.file),
         output: raw.output ? normalizeCompileCommandPath(directory, raw.output) : undefined,
-        arguments: preprocessArguments(args)
+        arguments: preprocessArguments(args),
     };
 }
 

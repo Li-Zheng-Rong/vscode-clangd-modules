@@ -7,6 +7,7 @@ import {CompilationDatabase, CompileCommand, compileCommandFilePath} from '../co
 import {Environment} from '../environment-variables';
 import {createLogger} from '../logging';
 import {fs} from '../pr';
+import * as util from '../util';
 import {varsForMsvcToolchain} from '../visual-studio';
 
 import {buildGeneratedCompileCommands} from './build';
@@ -32,15 +33,24 @@ async function readTextIfExists(filePath: string): Promise<string | undefined> {
 
 export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     private readonly onDidChangeClientEmitter = new vscode.EventEmitter<BaseLanguageClient | undefined>();
+    private readonly subscriptions: vscode.Disposable[] = [];
     private database: CompilationDatabase = new CompilationDatabase([]);
     private clangdContext: ClangdContext | null = null;
+    private cdbWatcher: vscode.FileSystemWatcher | undefined;
+    private cdbRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    private sourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    private readonly pendingSourceRefreshes = new Set<string>();
+    private refreshChain: Promise<void> = Promise.resolve();
     private readonly moduleDepsByFile = new Map<string, FileModuleImportExportEntries>();
 
     readonly onDidChangeClient = this.onDidChangeClientEmitter.event;
 
     constructor(private readonly compilationDatabasePath: string,
                 private options: CompilationDatabaseScanDepsManagerOptions = {}) {
-        void this.refreshCdb(true);
+        this.createCdbWatcher();
+        this.subscriptions.push(vscode.workspace.onDidSaveTextDocument(
+            document => { this.handleSavedDocument(document); }));
+        void this.enqueueRefresh(async () => { await this.refreshCdb(true); });
     }
 
     get compilationDatabase(): CompilationDatabase { return this.database; }
@@ -65,16 +75,101 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         return this.database.has(filePath);
     }
 
-    async refreshFile(filePath: string): Promise<boolean> {
-        const entry = this.database.get(filePath);
-        if (!entry)
+    private createCdbWatcher(): void {
+        this.cdbWatcher?.dispose();
+        this.cdbWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(path.dirname(this.compilationDatabasePath), path.basename(this.compilationDatabasePath)));
+        this.subscriptions.push(this.cdbWatcher.onDidChange(uri => { void this.handleCdbChanged(uri); }));
+        this.subscriptions.push(this.cdbWatcher.onDidCreate(uri => { void this.handleCdbChanged(uri); }));
+        this.subscriptions.push(this.cdbWatcher);
+    }
+
+    private async handleCdbChanged(uri: vscode.Uri): Promise<void> {
+        if (util.platformNormalizePath(uri.fsPath) !== util.platformNormalizePath(this.compilationDatabasePath))
+            return;
+
+        try {
+            if ((await vscode.workspace.fs.stat(uri)).size <= 0)
+                return;
+        } catch {
+            return;
+        }
+
+        this.scheduleCdbRefresh();
+    }
+
+    private handleSavedDocument(document: vscode.TextDocument): void {
+        if (document.uri.scheme !== 'file' || !this.hasFile(document.uri.fsPath))
+            return;
+
+        this.scheduleSourceRefresh(document.uri.fsPath);
+    }
+
+    private scheduleCdbRefresh(): void {
+        if (this.cdbRefreshTimer)
+            clearTimeout(this.cdbRefreshTimer);
+
+        this.cdbRefreshTimer = setTimeout(() => {
+            this.cdbRefreshTimer = undefined;
+            void this.enqueueRefresh(async () => { await this.refreshCdb(); });
+        }, 2000);
+    }
+
+    private scheduleSourceRefresh(filePath: string): void {
+        this.pendingSourceRefreshes.add(util.platformNormalizePath(filePath));
+        if (this.sourceRefreshTimer)
+            clearTimeout(this.sourceRefreshTimer);
+
+        this.sourceRefreshTimer = setTimeout(() => {
+            const filePaths = [...this.pendingSourceRefreshes];
+            this.pendingSourceRefreshes.clear();
+            this.sourceRefreshTimer = undefined;
+            void this.enqueueRefresh(async () => { await this.refreshFiles(filePaths); });
+        }, 2000);
+    }
+
+    private async enqueueRefresh(action: () => Promise<void>): Promise<void> {
+        const run = async () => {
+            try {
+                await action();
+            } catch (error) {
+                log.warning(`Failed to refresh generated compile database: ${util.errorToString(error)}`);
+                if (error instanceof Error && error.stack)
+                    log.debug(error.stack);
+            }
+        };
+        this.refreshChain = this.refreshChain.then(run, run);
+        await this.refreshChain;
+    }
+
+    private async refreshFile(filePath: string): Promise<boolean> {
+        return this.refreshFiles([filePath]);
+    }
+
+    private async refreshFiles(filePaths: string[]): Promise<boolean> {
+        const entries: CompileCommand[] = [];
+        const seenFiles = new Set<string>();
+        for (const filePath of filePaths) {
+            const entry = this.database.get(filePath);
+            if (!entry)
+                continue;
+
+            const file = compileCommandFilePath(entry);
+            if (seenFiles.has(file))
+                continue;
+
+            seenFiles.add(file);
+            entries.push(entry);
+        }
+
+        if (entries.length === 0)
             return false;
 
-        await this.scanAndUpdate(entry);
+        await Promise.all(entries.map(entry => this.scanAndUpdate(entry)));
         return this.writeGeneratedCompileCommands(false);
     }
 
-    async refreshCdb(forceRewrite = false): Promise<boolean> {
+    private async refreshCdb(forceRewrite = false): Promise<boolean> {
         const nextDatabase = await CompilationDatabase.fromFilePaths([this.compilationDatabasePath]) ?? new CompilationDatabase([]);
         const update = this.database.replaceWith(nextDatabase);
         for (const file of update.removed)
@@ -153,6 +248,13 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     }
 
     dispose(): void {
+        if (this.cdbRefreshTimer)
+            clearTimeout(this.cdbRefreshTimer);
+        if (this.sourceRefreshTimer)
+            clearTimeout(this.sourceRefreshTimer);
+        this.pendingSourceRefreshes.clear();
+        this.subscriptions.forEach(subscription => { subscription.dispose(); });
+        this.subscriptions.length = 0;
         this.shutdownClangd();
         this.onDidChangeClientEmitter.dispose();
     }

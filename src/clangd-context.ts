@@ -3,7 +3,6 @@ import * as vscodelc from 'vscode-languageclient/node';
 
 import * as ast from './ast';
 import * as config from './config';
-import * as configFileWatcher from './config-file-watcher';
 import * as fileStatus from './file-status';
 import * as inactiveRegions from './inactive-regions';
 import * as inlayHints from './inlay-hints';
@@ -251,7 +250,6 @@ export class ClangdContext implements vscode.Disposable {
     ast.activate(this);
     openConfig.activate(this);
     inactiveRegions.activate(this);
-    await configFileWatcher.activate(this);
     this.client.start();
     console.log('Clang Language Server is now active!');
     fileStatus.activate(this);

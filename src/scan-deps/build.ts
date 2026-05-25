@@ -1,7 +1,7 @@
-import { CompileCommand, CompilationDatabase } from "./compilation-database";
-import * as shlex from "./shlex";
-import type { FileModuleImportExportEntries, ModuleExportEntry, ModuleImportEntry } from "./scan-deps";
-import * as util from "./util";
+import {CompilationDatabase, CompileCommand} from '../compilation-database';
+import * as util from '../util';
+
+import type {FileModuleImportExportEntries, ModuleExportEntry, ModuleImportEntry} from './index';
 
 interface ModuleRef {
     name: string;
@@ -25,67 +25,6 @@ export interface GeneratedCompileCommands {
     diagnostics: string[];
 }
 
-type ParsedCommand = {
-    command: Omit<GeneratedCompileCommand, "arguments">;
-    argsWithoutModmap: string[];
-    scanDeps?: FileModuleImportExportEntries;
-};
-
-function optionValue(
-    args: readonly string[],
-    index: number,
-    ...options: string[]
-): { value?: string; nextIndex: number } | undefined {
-    const arg = args[index];
-    for (const option of options) {
-        if (arg === option) return { value: args[index + 1], nextIndex: index + 1 };
-
-        const prefix = `${option}=`;
-        if (arg.startsWith(prefix))
-            return { value: arg.slice(prefix.length), nextIndex: index };
-    }
-    return undefined;
-}
-
-function isModmapResponseArgument(argument: string): boolean {
-    return argument.startsWith("@") && util.platformNormalizePath(argument.substring(1)).endsWith(".modmap");
-}
-
-function filterModuleArgs(args: readonly string[]): string[] {
-    const filtered: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
-        if (isModmapResponseArgument(arg))
-            continue;
-
-        const moduleMapper = optionValue(args, i, "-fmodule-mapper");
-        if (moduleMapper) {
-            i = moduleMapper.nextIndex;
-            continue;
-        }
-
-        filtered.push(arg);
-    }
-    return filtered;
-}
-
-function parseCompileCommand(
-    entry: CompileCommand,
-    scanDepsByFile: ReadonlyMap<string, FileModuleImportExportEntries>,
-): ParsedCommand {
-    const args = entry.arguments ?? [...shlex.splitCommandLine(entry.command)];
-    const scanDeps = scanDepsByFile.get(util.platformNormalizePath(entry.file));
-    return {
-        command: {
-            directory: entry.directory,
-            file: entry.file,
-            ...(entry.output ? { output: entry.output } : {}),
-        },
-        argsWithoutModmap: filterModuleArgs(args),
-        scanDeps,
-    };
-}
-
 function buildScanDepsByFile(scanDeps: readonly FileModuleImportExportEntries[], diagnostics: string[]): Map<string, FileModuleImportExportEntries> {
     const result = new Map<string, FileModuleImportExportEntries>();
     for (const entry of scanDeps) {
@@ -106,14 +45,10 @@ function buildProvidedModules(scanDeps: readonly FileModuleImportExportEntries[]
     const providedModules: ProvidedModules = { byKey: new Map(), byName: new Map() };
     for (const entry of scanDeps) {
         for (const exported of entry.exports) {
-            if (!exported.pcmPath) {
-                diagnostics.push(`Missing PCM output for module export ${exported.logicalName}`);
-                continue;
-            }
             const key = moduleKey(exported);
             const ref = { name: exported.logicalName, path: exported.pcmPath };
             if (providedModules.byKey.has(key)) {
-                diagnostics.push(`Duplicate module export ${exported.logicalName} from ${exported.sourcePath ?? "unknown source"}`);
+                diagnostics.push(`Duplicate module export ${exported.logicalName} from ${exported.sourcePath}`);
                 continue;
             }
             providedModules.byKey.set(key, ref);
@@ -152,9 +87,7 @@ function moduleInputs(
     const output = moduleOutput(entry);
     const inputs = entry.imports.flatMap(imported => {
         const ref = resolveImportedModule(imported, providedModules, diagnostics);
-        if (!ref)
-            return [];
-        return [ref];
+        return ref ? [ref] : [];
     });
     return output ? inputs.filter(input => input.path !== output) : inputs;
 }
@@ -170,11 +103,10 @@ function buildModuleGraph(
         if (!output)
             continue;
 
-        if (graph.has(output)) {
+        if (graph.has(output))
             diagnostics.push(`Duplicate module output path ${output}`);
-        } else {
+        else
             graph.set(output, moduleInputs(entry, providedModules, diagnostics));
-        }
     }
     return graph;
 }
@@ -210,23 +142,36 @@ function addModuleArgs(args: readonly string[], output: string | undefined, inpu
     return [...args.slice(0, insertAt), ...moduleArgs, ...args.slice(insertAt)];
 }
 
-export async function buildGeneratedCompileCommandsFromCompilationDatabase(
+function buildCommand(
+    command: CompileCommand,
+    scanDeps: FileModuleImportExportEntries | undefined,
+    providedModules: ProvidedModules,
+    graph: ReadonlyMap<string, ModuleRef[]>,
+): GeneratedCompileCommand {
+    const output = scanDeps ? moduleOutput(scanDeps) : undefined;
+    const inputs = scanDeps ? expandModuleInputs(moduleInputs(scanDeps, providedModules), graph) : [];
+    return {
+        directory: command.directory,
+        file: command.file,
+        ...(command.output ? { output: command.output } : {}),
+        arguments: addModuleArgs(command.arguments, output, inputs),
+    };
+}
+
+export async function buildGeneratedCompileCommands(
     database: CompilationDatabase,
     scanDeps: readonly FileModuleImportExportEntries[],
 ): Promise<GeneratedCompileCommands> {
     const diagnostics: string[] = [];
     const scanDepsByFile = buildScanDepsByFile(scanDeps, diagnostics);
     const providedModules = buildProvidedModules(scanDeps, diagnostics);
-    const entries = database.entries().map(entry => parseCompileCommand(entry, scanDepsByFile));
     const graph = buildModuleGraph(scanDeps, providedModules, diagnostics);
-    const commands = entries.map(entry => {
-        const output = entry.scanDeps ? moduleOutput(entry.scanDeps) : undefined;
-        const inputs = entry.scanDeps ? expandModuleInputs(moduleInputs(entry.scanDeps, providedModules), graph) : [];
-        return {
-            ...entry.command,
-            arguments: addModuleArgs(entry.argsWithoutModmap, output, inputs),
-        };
-    });
+    const commands = database.entries().map(entry => buildCommand(
+        entry,
+        scanDepsByFile.get(util.platformNormalizePath(entry.file)),
+        providedModules,
+        graph,
+    ));
 
     return { commands, diagnostics };
 }

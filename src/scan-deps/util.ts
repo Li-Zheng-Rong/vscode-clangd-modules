@@ -2,7 +2,6 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 
 import {CompileCommand} from '../compilation-database';
-import * as shlex from '../shlex';
 import * as baseUtil from '../util';
 
 import type {ModuleExportEntry, ModuleImportEntry, ModuleScanResult} from './index';
@@ -33,7 +32,7 @@ export function resolveCommandPath(entry: CompileCommand, value: string): string
 }
 
 export function commandArguments(entry: CompileCommand): string[] {
-    return entry.arguments ?? [...shlex.splitCommandLine(entry.command)];
+    return entry.arguments;
 }
 
 export function compilerPath(entry: CompileCommand): string | undefined {

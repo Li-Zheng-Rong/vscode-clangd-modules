@@ -33,6 +33,39 @@ async function readTextIfExists(filePath: string): Promise<string | undefined> {
     }
 }
 
+async function executableExists(filePath: string): Promise<boolean> {
+    try {
+        await fs_.promises.access(filePath, fs_.constants.F_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function executableNameCandidates(name: string): string[] {
+    if (process.platform !== 'win32' || path.extname(name))
+        return [name];
+
+    const extensions = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
+        .split(';')
+        .filter(extension => extension.length > 0);
+    return extensions.map(extension => `${name}${extension}`);
+}
+
+async function findProgramByName(name: string): Promise<string | undefined> {
+    for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
+        if (!directory)
+            continue;
+
+        for (const candidateName of executableNameCandidates(name)) {
+            const candidate = path.join(directory, candidateName);
+            if (await executableExists(candidate))
+                return candidate;
+        }
+    }
+    return undefined;
+}
+
 export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     private readonly onDidChangeClientEmitter = new vscode.EventEmitter<BaseLanguageClient | undefined>();
     private readonly subscriptions: vscode.Disposable[] = [];
@@ -231,7 +264,7 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         }
 
         const environment = await this.visualStudioEnvironmentForToolchain();
-        const queryDriver = await this.queryDriverForToolchain();
+        const queryDriver = await this.queryDriverFromCompilers();
         this.logClangdEnvironment(environment);
         this.logClangdQueryDriver(queryDriver);
         this.clangdContext = await ClangdContext.create(
@@ -266,16 +299,36 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         return varsForMsvcToolchain(toolchain);
     }
 
-    private async queryDriverForToolchain(): Promise<string | undefined> {
-        const toolchain = this.options.toolchain;
-        if (!toolchain || isMsvcToolchain(toolchain) || isClangClToolchain(toolchain))
-            return undefined;
+    private async addQueryDriverPath(drivers: Set<string>, compiler: string | undefined, directory?: string): Promise<void> {
+        if (!compiler || isMsvcToolchain(compiler) || isClangClToolchain(compiler))
+            return;
 
-        const drivers = new Set<string>([toolchain]);
+        const unquoted = compiler.replace(/^\"|\"$/g, '');
+        const driver = /[\\/]/.test(unquoted)
+            ? path.resolve(directory ?? '', unquoted)
+            : await findProgramByName(unquoted);
+        if (!driver)
+            return;
+
+        drivers.add(driver);
+        drivers.add(path.normalize(driver));
         try {
-            drivers.add(await fs_.promises.realpath(toolchain));
+            drivers.add(await fs_.promises.realpath(driver));
         } catch {
         }
+    }
+
+    private async queryDriverFromCompilers(): Promise<string | undefined> {
+        const drivers = new Set<string>();
+        await this.addQueryDriverPath(drivers, this.options.toolchain);
+        await Promise.all(this.database.entries().map(entry => this.addQueryDriverPath(
+            drivers,
+            entry.arguments[0],
+            entry.directory,
+        )));
+
+        if (drivers.size === 0)
+            return undefined;
         return [...drivers].join(',');
     }
 

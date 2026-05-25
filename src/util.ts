@@ -221,12 +221,13 @@ export function compareVersion(va: Version, vb: Version) {
 }
 
 /**
- * Retrieves the current instance of the CMake Tools extension.
- * @returns The current instance of the CMake Tools extension.
+ * Retrieves the current instance of the clangd extension.
+ * @returns The current instance of the clangd extension.
  * @throws An error if the extension is not found.
  */
 export function thisExtension() {
-    const extension = vscode.extensions.getExtension('ms-vscode.vscode-clangd');
+    const extension = vscode.extensions.getExtension('llvm-vs-code-extensions.vscode-clangd')
+        ?? vscode.extensions.getExtension('ms-vscode.vscode-clangd');
     if (!extension) {
         throw new Error(localize('extension.is.undefined', 'Extension is undefined!'));
     }
@@ -234,7 +235,7 @@ export function thisExtension() {
 }
 
 /**
- * Retrieves the extension path of the current instance of the CMake Tools extension.
+ * Retrieves the extension path of the current instance of the clangd extension.
  * @returns The extension path as a string.
  */
 export function thisExtensionPath(): string {

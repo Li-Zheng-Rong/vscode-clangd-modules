@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as fs_ from 'fs';
 import * as vscode from 'vscode';
 import {BaseLanguageClient} from 'vscode-languageclient';
 
@@ -230,13 +231,16 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         }
 
         const environment = await this.visualStudioEnvironmentForToolchain();
+        const queryDriver = await this.queryDriverForToolchain();
         this.logClangdEnvironment(environment);
+        this.logClangdQueryDriver(queryDriver);
         this.clangdContext = await ClangdContext.create(
             this.options.globalStoragePath,
             this.options.outputChannel,
             {
                 compileCommandsDir: this.generatedCompileCommandsDir,
                 environment,
+                queryDriver,
             });
         this.onDidChangeClientEmitter.fire(this.client);
     }
@@ -262,6 +266,19 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         return varsForMsvcToolchain(toolchain);
     }
 
+    private async queryDriverForToolchain(): Promise<string | undefined> {
+        const toolchain = this.options.toolchain;
+        if (!toolchain || isMsvcToolchain(toolchain) || isClangClToolchain(toolchain))
+            return undefined;
+
+        const drivers = new Set<string>([toolchain]);
+        try {
+            drivers.add(await fs_.promises.realpath(toolchain));
+        } catch {
+        }
+        return [...drivers].join(',');
+    }
+
     private logClangdEnvironment(environment: Environment | undefined): void {
         const toolchain = this.options.toolchain;
         if (!toolchain) {
@@ -284,6 +301,11 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         const pathValue = environment.PATH ?? '';
         log.info(`Starting clangd with Visual Studio environment for ${toolchain}: INCLUDE=${include ? 'set' : 'missing'}, LIB=${lib ? 'set' : 'missing'}, PATH=${pathValue ? 'set' : 'missing'}`);
         log.debug(`Visual Studio INCLUDE for clangd: ${include}`);
+    }
+
+    private logClangdQueryDriver(queryDriver: string | undefined): void {
+        if (queryDriver)
+            log.debug(`Starting clangd with query-driver: ${queryDriver}`);
     }
 
     dispose(): void {

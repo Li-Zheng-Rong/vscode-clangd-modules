@@ -28,6 +28,7 @@ export function isClangdDocument(document: vscode.TextDocument) {
 export interface ClangdContextOptions {
   compileCommandsDir?: string;
   environment?: Environment;
+  queryDriver?: string;
 }
 
 class ClangdLanguageClient extends vscodelc.LanguageClient {
@@ -94,6 +95,8 @@ export class ClangdContext implements vscode.Disposable {
         '--experimental-modules-support',
       ];
     }
+    if (options.queryDriver)
+      clangdArguments = [...clangdArguments, `--query-driver=${options.queryDriver}`];
     if (useScriptAsExecutable) {
       let quote = (str: string) => { return `"${str}"`; };
       clangdPath = quote(clangdPath)

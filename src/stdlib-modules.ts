@@ -4,7 +4,7 @@ import * as path from "path";
 import { promisify } from "util";
 
 import { CodeModel } from "vscode-cmake-tools";
-import { createLogger } from "./logger";
+import { createLogger } from "./logging";
 import * as util from "./util";
 
 const log = createLogger('std-module');

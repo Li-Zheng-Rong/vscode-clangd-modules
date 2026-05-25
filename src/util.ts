@@ -1,4 +1,10 @@
 import * as path from 'path';
+import * as fs from 'fs';
+import * as nls from 'vscode-nls';
+import * as vscode from 'vscode';
+
+nls.config({ messageFormat: nls.MessageFormat.bundle, bundleFormat: nls.BundleFormat.standalone })();
+const localize: nls.LocalizeFunc = nls.loadMessageBundle();
 
 /**
  * Escape a string so it can be used as a regular expression
@@ -97,4 +103,140 @@ export function errorToString(e: any): string {
         return `\n\t${e.message}`;
     }
     return `\n\t${e.toString()}`;
+}
+
+/**
+ * Checks if a directory exists at the specified path synchronously.
+ * @param dirPath The path to the directory.
+ * @returns True if the directory exists, false otherwise.
+ */
+export function checkDirectoryExistsSync(dirPath: string): boolean {
+    try {
+        return fs.statSync(dirPath).isDirectory();
+    } catch (e) {
+    }
+    return false;
+}
+
+/**
+ * Creates a directory if it does not exist synchronously.
+ * @param dirPath The path to the directory.
+ */
+export function createDirIfNotExistsSync(dirPath: string | undefined): void {
+    if (!dirPath) {
+        return;
+    }
+    if (!checkDirectoryExistsSync(dirPath)) {
+        try {
+            fs.mkdirSync(dirPath, {recursive: true});
+        } catch (e) {
+            console.log(e);
+        }
+    }
+}
+
+export class InvalidVersionString extends Error {}
+
+export interface Version {
+    major: number;
+    minor: number;
+    patch: number;
+}
+
+export enum Ordering {
+    Greater,
+    Equivalent,
+    Less,
+}
+
+/**
+ * Parses a version string into a Version object.
+ * The version string is expected to be in the format "major.minor.patch".
+ * @param str The version string to parse.
+ * @returns A Version object with the parsed major, minor, and patch numbers.
+ * @throws InvalidVersionString if the input string is not a valid version string.
+ */
+export function parseVersion(str: string): Version {
+    const version_re = /(\d+)\.(\d+)(\.(\d+))?(.*)/;
+    const mat = version_re.exec(str);
+    if (!mat) {
+        throw new InvalidVersionString(localize('invalid.version.string', 'Invalid version string {0}', str));
+    }
+    const [, major, minor, , patch] = mat;
+    return {
+        major: parseInt(major ?? '0'),
+        minor: parseInt(minor ?? '0'),
+        patch: parseInt(patch ?? '0')
+    };
+}
+
+/**
+ * Compares two version objects or version strings.
+ * @param a The first version object or version string to compare.
+ * @param b The second version object or version string to compare.
+ * @returns An Ordering enum value indicating whether the first version is less than, equal to, or greater than the second version.
+ */
+export function compareVersions(a: Version | string, b: Version | string): Ordering {
+    if (typeof a === 'string') {
+        a = parseVersion(a);
+    }
+    if (typeof b === 'string') {
+        b = parseVersion(b);
+    }
+    // Compare major
+    if (a.major > b.major) {
+        return Ordering.Greater;
+    } else if (a.major < b.major) {
+        return Ordering.Less;
+        // Compare minor
+    } else if (a.minor > b.minor) {
+        return Ordering.Greater;
+    } else if (a.minor < b.minor) {
+        return Ordering.Less;
+        // Compare patch
+    } else if (a.patch > b.patch) {
+        return Ordering.Greater;
+    } else if (a.patch < b.patch) {
+        return Ordering.Less;
+        // No difference:
+    } else {
+        return Ordering.Equivalent;
+    }
+}
+
+/**
+ * Compares two version objects.
+ * @param va The first version object to compare.
+ * @param vb The second version object to compare.
+ * @returns A negative number if va < vb, zero if va == vb, and a positive number if va > vb.
+ */
+export function compareVersion(va: Version, vb: Version) {
+    if (va.major !== vb.major) {
+        return va.major - vb.major;
+    }
+    if (va.minor !== vb.minor) {
+        return va.minor - vb.minor;
+    }
+    return va.patch - vb.patch;
+}
+
+/**
+ * Retrieves the current instance of the CMake Tools extension.
+ * @returns The current instance of the CMake Tools extension.
+ * @throws An error if the extension is not found.
+ */
+export function thisExtension() {
+    const extension = vscode.extensions.getExtension('ms-vscode.vscode-clangd');
+    if (!extension) {
+        throw new Error(localize('extension.is.undefined', 'Extension is undefined!'));
+    }
+    return extension;
+}
+
+/**
+ * Retrieves the extension path of the current instance of the CMake Tools extension.
+ * @returns The extension path as a string.
+ */
+export function thisExtensionPath(): string {
+    return thisExtension().extensionPath;
 }

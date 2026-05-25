@@ -1,7 +1,7 @@
 import * as shlex from './shlex';
 import { fs } from './pr';
 import * as util from './util';
-import {createLogger} from './logger';
+import {createLogger} from './logging';
 import * as nls from 'vscode-nls';
 
 nls.config({ messageFormat: nls.MessageFormat.bundle, bundleFormat: nls.BundleFormat.standalone })();

@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { collectCxxModuleFileSetSources } from './cmake-file-api';
 import { CompilationDatabase, CompileCommand } from './compilation-database';
 import { CodeModel } from 'vscode-cmake-tools';
-import { createLogger } from './logger';
+import { createLogger } from './logging';
 import { fs } from './pr';
 import * as util from './util';
 

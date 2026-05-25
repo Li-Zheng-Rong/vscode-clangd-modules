@@ -9,12 +9,9 @@ import {CompilationDatabaseScanDepsManager} from './scan-deps';
 
 const log = createLogger('cmake-active-project');
 
-export interface ActiveCMakeProjectState {
-  projectUri: vscode.Uri;
+interface ActiveCMakeProjectState {
   project: Project;
-  buildDirectory: string;
   compilationDatabasePath: string;
-  generatedCompileCommandsDir: string;
 }
 
 export class CMakeActiveProjectManager implements vscode.Disposable {
@@ -47,13 +44,7 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
                       private readonly outputChannel: vscode.OutputChannel,
                       private modulesEnabled: boolean) {}
 
-  get state(): ActiveCMakeProjectState|undefined { return this.activeState; }
-
   get client(): BaseLanguageClient|undefined { return this.cdbManager?.client; }
-
-  get compileCommandsDir(): string|undefined {
-    return this.activeState?.generatedCompileCommandsDir;
-  }
 
   private async activate(): Promise<void> {
     if (this.api) {
@@ -95,11 +86,8 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
     }
 
     this.setActiveState({
-      projectUri: uri,
       project,
-      buildDirectory,
       compilationDatabasePath: path.join(buildDirectory, 'compile_commands.json'),
-      generatedCompileCommandsDir: path.join(buildDirectory, '.clangd'),
     });
   }
 

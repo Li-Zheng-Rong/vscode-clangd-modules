@@ -21,7 +21,6 @@ const log = createLogger('scan-deps-cdb-manager');
 export interface CompilationDatabaseScanDepsManagerOptions {
     globalStoragePath?: string;
     outputChannel?: vscode.OutputChannel;
-    toolchain?: string;
     modulesEnabled?: boolean;
 }
 
@@ -263,7 +262,7 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
             return;
         }
 
-        const environment = await this.visualStudioEnvironmentForToolchain();
+        const environment = await this.visualStudioEnvironmentFromCdb();
         const queryDriver = await this.queryDriverFromCompilers();
         this.logClangdEnvironment(environment);
         this.logClangdQueryDriver(queryDriver);
@@ -291,22 +290,35 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
 
     clientIsRunning(): boolean { return this.clangdContext?.clientIsRunning() ?? false; }
 
-    private async visualStudioEnvironmentForToolchain(): Promise<Environment | undefined> {
-        const toolchain = this.options.toolchain;
-        if (!toolchain || (!isMsvcToolchain(toolchain) && !isClangClToolchain(toolchain)))
+    private async resolveCompilerPathLikeClangd(compiler: string | undefined, directory?: string): Promise<string | undefined> {
+        if (!compiler)
             return undefined;
+        const unquoted = compiler.replace(/^\"|\"$/g, '');
+        return /[\\/]/.test(unquoted)
+            ? path.resolve(directory ?? '', unquoted)
+            : await findProgramByName(unquoted);
+    }
 
-        return varsForMsvcToolchain(toolchain);
+    private async visualStudioEnvironmentFromCdb(): Promise<Environment | undefined> {
+        for (const entry of this.database.entries()) {
+            const compiler = entry.arguments[0];
+            if (!isMsvcToolchain(compiler) && !isClangClToolchain(compiler))
+                continue;
+
+            const driver = await this.resolveCompilerPathLikeClangd(compiler, entry.directory);
+            if (!driver)
+                return undefined;
+
+            return varsForMsvcToolchain(driver);
+        }
+        return undefined;
     }
 
     private async addQueryDriverPath(drivers: Set<string>, compiler: string | undefined, directory?: string): Promise<void> {
         if (!compiler || isMsvcToolchain(compiler) || isClangClToolchain(compiler))
             return;
 
-        const unquoted = compiler.replace(/^\"|\"$/g, '');
-        const driver = /[\\/]/.test(unquoted)
-            ? path.resolve(directory ?? '', unquoted)
-            : await findProgramByName(unquoted);
+        const driver = await this.resolveCompilerPathLikeClangd(compiler, directory);
         if (!driver)
             return;
 
@@ -320,7 +332,6 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
 
     private async queryDriverFromCompilers(): Promise<string | undefined> {
         const drivers = new Set<string>();
-        await this.addQueryDriverPath(drivers, this.options.toolchain);
         await Promise.all(this.database.entries().map(entry => this.addQueryDriverPath(
             drivers,
             entry.arguments[0],
@@ -333,26 +344,15 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     }
 
     private logClangdEnvironment(environment: Environment | undefined): void {
-        const toolchain = this.options.toolchain;
-        if (!toolchain) {
-            log.debug('Starting clangd without toolchain-specific environment: no CMake toolchain path.');
-            return;
-        }
-
-        if (!isMsvcToolchain(toolchain) && !isClangClToolchain(toolchain)) {
-            log.debug(`Starting clangd without Visual Studio environment for non-MSVC toolchain: ${toolchain}`);
-            return;
-        }
-
         if (!environment) {
-            log.warning(`Starting clangd without Visual Studio environment: failed to resolve vars for ${toolchain}`);
+            log.debug('Starting clangd without Visual Studio environment: no MSVC or clang-cl compiler found in CDB.');
             return;
         }
 
         const include = environment.INCLUDE ?? '';
         const lib = environment.LIB ?? '';
         const pathValue = environment.PATH ?? '';
-        log.info(`Starting clangd with Visual Studio environment for ${toolchain}: INCLUDE=${include ? 'set' : 'missing'}, LIB=${lib ? 'set' : 'missing'}, PATH=${pathValue ? 'set' : 'missing'}`);
+        log.info(`Starting clangd with Visual Studio environment from CDB: INCLUDE=${include ? 'set' : 'missing'}, LIB=${lib ? 'set' : 'missing'}, PATH=${pathValue ? 'set' : 'missing'}`);
         log.debug(`Visual Studio INCLUDE for clangd: ${include}`);
     }
 

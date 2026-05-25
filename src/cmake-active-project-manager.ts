@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {BaseLanguageClient} from 'vscode-languageclient';
-import {CMakeToolsApi, getCMakeToolsApi, Project, Version} from 'vscode-cmake-tools';
+import {CMakeToolsApi, getCMakeToolsApi, Version} from 'vscode-cmake-tools';
 
 import * as config from './config';
 import {createLogger} from './logging';
@@ -10,7 +10,6 @@ import {CompilationDatabaseScanDepsManager} from './scan-deps';
 const log = createLogger('cmake-active-project');
 
 interface ActiveCMakeProjectState {
-  project: Project;
   compilationDatabasePath: string;
 }
 
@@ -20,7 +19,6 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   private activeState: ActiveCMakeProjectState|undefined;
   private cdbManager: CompilationDatabaseScanDepsManager|undefined;
   private cdbManagerClientSubscription: vscode.Disposable|undefined;
-  private codeModelSubscription: vscode.Disposable|undefined;
   private activeProjectGeneration = 0;
 
   readonly onDidChangeClient = this.onDidChangeClientEmitter.event;
@@ -87,7 +85,6 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
     }
 
     this.setActiveState({
-      project,
       compilationDatabasePath: path.join(buildDirectory, 'compile_commands.json'),
     });
   }
@@ -111,38 +108,7 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
   clientIsRunning(): boolean { return this.cdbManager?.clientIsRunning() ?? false; }
 
   private setActiveState(state: ActiveCMakeProjectState|undefined): void {
-    this.codeModelSubscription?.dispose();
-    this.codeModelSubscription = undefined;
     this.activeState = state;
-
-    if (state)
-      this.codeModelSubscription = state.project.onCodeModelChanged(
-          () => { this.handleCodeModelChanged(state.project); });
-
-    this.resetCdbManagerWhenReady();
-  }
-
-  private handleCodeModelChanged(project: Project): void {
-    if (this.activeState?.project !== project)
-      return;
-
-    this.resetCdbManagerWhenReady();
-  }
-
-  private resetCdbManagerWhenReady(): void {
-    if (!this.activeState) {
-      this.clearCdbManager();
-      this.onDidChangeClientEmitter.fire(undefined);
-      return;
-    }
-
-    if (!this.activeState.project.codeModel) {
-      log.info('Waiting for CMake code model before starting clangd.');
-      this.clearCdbManager();
-      this.onDidChangeClientEmitter.fire(undefined);
-      return;
-    }
-
     this.resetCdbManager();
   }
 
@@ -167,7 +133,6 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
         {
           globalStoragePath: this.globalStoragePath,
           outputChannel: this.outputChannel,
-          toolchain: this.toolchainForProject(this.activeState.project),
           modulesEnabled: this.modulesEnabled,
         });
     this.cdbManagerClientSubscription = this.cdbManager.onDidChangeClient(
@@ -175,46 +140,11 @@ export class CMakeActiveProjectManager implements vscode.Disposable {
     this.onDidChangeClientEmitter.fire(this.cdbManager.client);
   }
 
-  private toolchainForProject(project: Project): string|undefined {
-    const toolchains = project.codeModel?.toolchains;
-    if (!project.codeModel) {
-      log.warning('CMake project code model is not available; cannot determine CXX toolchain.');
-      return undefined;
-    }
-
-    if (!toolchains || toolchains.size === 0) {
-      log.warning('CMake project code model has no toolchains; cannot determine CXX toolchain.');
-      return undefined;
-    }
-
-    for (const [language, toolchain] of toolchains)
-      log.debug(`CMake code model toolchain: ${language} -> ${toolchain.path}`);
-
-    const cxxToolchain = this.toolchainForLanguage(toolchains, 'CXX');
-    if (cxxToolchain) {
-      log.info(`Using CMake CXX toolchain: ${cxxToolchain}`);
-      return cxxToolchain;
-    }
-
-    for (const toolchain of toolchains.values()) {
-      log.warning(`CMake CXX toolchain not found; falling back to first toolchain: ${toolchain.path}`);
-      return toolchain.path;
-    }
-    return undefined;
-  }
-
-  private toolchainForLanguage(toolchains: Map<string, {path: string}>, language: string): string|undefined {
-    return toolchains.get(language)?.path ??
-        [...toolchains.entries()].find(([key]) => key.toUpperCase() === language)?.[1].path;
-  }
-
   dispose(): void {
     this.subscriptions.forEach(subscription => { subscription.dispose(); });
     this.subscriptions.length = 0;
-    this.codeModelSubscription?.dispose();
     this.cdbManagerClientSubscription?.dispose();
     this.cdbManager?.dispose();
-    this.codeModelSubscription = undefined;
     this.cdbManagerClientSubscription = undefined;
     this.cdbManager = undefined;
     this.onDidChangeClientEmitter.dispose();

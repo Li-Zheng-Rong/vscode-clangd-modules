@@ -5,6 +5,7 @@ import {ClangdExtension} from '../api/vscode-clangd';
 import {ClangdExtensionImpl} from './api';
 import {ClangdContext} from './clangd-context';
 import {get, update} from './config';
+import {registerGeneratedCompileCommandsCommand} from './generate-cdb';
 import {setLoggerOutputChannel} from './logging';
 
 let apiInstance: ClangdExtensionImpl|undefined;
@@ -20,6 +21,8 @@ export async function activate(context: vscode.ExtensionContext):
   context.subscriptions.push(outputChannel);
 
   let clangdContext: ClangdContext|null = null;
+
+  registerGeneratedCompileCommandsCommand(context);
 
   context.subscriptions.push(
       vscode.commands.registerCommand('clangd.activate', async () => {

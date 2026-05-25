@@ -236,6 +236,11 @@
                 "title": "Restart language server"
             },
             {
+                "command": "clangd.refreshGeneratedCompileCommands",
+                "category": "clangd",
+                "title": "Refresh Generated Compile Commands"
+            },
+            {
                 "command": "clangd.shutdown",
                 "category": "clangd",
                 "title": "Shutdown language server"

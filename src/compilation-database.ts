@@ -82,7 +82,10 @@ function preprocessArguments(args: readonly string[]): string[] {
         if (isModmapResponseArgument(arg))
             continue;
 
-        const moduleMapper = optionValue(args, i, '-fmodule-mapper');
+        if (arg === '-fmodules-ts')
+            continue;
+
+        const moduleMapper = optionValue(args, i, '-fmodule-mapper', '-fdeps-format');
         if (moduleMapper) {
             i = moduleMapper.nextIndex;
             continue;

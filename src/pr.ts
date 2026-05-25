@@ -95,20 +95,14 @@ export namespace fs {
      * @param fspath The directory to create
      */
     export async function mkdir_p(fspath: string): Promise<void> {
-        const parent = path.dirname(fspath);
-        if (!await exists(parent)) {
-            await mkdir_p(parent);
-        } else {
-            if (!(await stat(parent)).isDirectory()) {
-                throw new Error(localize('cannot.create.path', 'Cannot create {0}: {1} is a non-directory', fspath, parent));
-            }
+        try {
+            await fsAccessLimiter(() => fs_.promises.mkdir(fspath, {recursive: true}));
+        } catch (error: any) {
+            if (error?.code !== 'EEXIST')
+                throw error;
         }
-        if (!await exists(fspath)) {
-            await mkdir(fspath);
-        } else {
-            if (!(await stat(fspath)).isDirectory()) {
-                throw new Error(localize('cannot.create.directory', 'Cannot create directory {0}. It exists, and is not a directory!', fspath));
-            }
+        if (!(await stat(fspath)).isDirectory()) {
+            throw new Error(localize('cannot.create.directory', 'Cannot create directory {0}. It exists, and is not a directory!', fspath));
         }
     }
 

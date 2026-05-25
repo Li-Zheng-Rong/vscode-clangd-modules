@@ -1,13 +1,13 @@
-import * as crypto from 'crypto';
 import * as path from 'path';
 
 import {CompilationDatabase, CompileCommand} from '../compilation-database';
 import {fs} from '../pr';
 import * as proc from '../proc';
-import * as shlex from '../shlex';
 import * as util from '../util';
+import type {Environment} from '../environment-variables';
 
 import type {FileModuleImportExportEntries, ModuleImportExportEntry} from './index';
+import {collectScanResults, commandArguments, modulePcmPath, normalizePath, stableHash} from './util';
 
 interface ClangScanDepsModuleEntry {
     'logical-name': string;
@@ -25,19 +25,6 @@ interface ClangScanDepsP1689Output {
     rules?: ClangScanDepsRule[];
 }
 
-function normalizePath(filePath: string): string {
-    return util.platformNormalizePath(filePath);
-}
-
-function resolveCommandPath(entry: CompileCommand, value: string): string {
-    const unquoted = value.replace(/^"|"$/g, '');
-    return normalizePath(path.isAbsolute(unquoted) ? unquoted : path.resolve(entry.directory, unquoted));
-}
-
-function commandArguments(entry: CompileCommand): string[] {
-    return entry.arguments ?? [...shlex.splitCommandLine(entry.command)];
-}
-
 function outputFromArguments(args: readonly string[]): string | undefined {
     for (let index = 0; index < args.length; index++) {
         const arg = args[index];
@@ -53,28 +40,11 @@ function outputFromArguments(args: readonly string[]): string | undefined {
     return undefined;
 }
 
-function compileCommandOutputKeys(entry: CompileCommand): string[] {
+function compileCommandOutputs(entry: CompileCommand): string[] {
     const output = entry.output ?? outputFromArguments(commandArguments(entry));
     if (!output)
         return [];
-    return [normalizePath(output), resolveCommandPath(entry, output)];
-}
-
-function buildOutputLookup(database: CompilationDatabase): Map<string, CompileCommand> {
-    const result = new Map<string, CompileCommand>();
-    for (const entry of database.entries())
-        for (const output of compileCommandOutputKeys(entry))
-            result.set(output, entry);
-    return result;
-}
-
-function stableHash(value: string): string {
-    return crypto.createHash('sha256').update(value).digest('hex').substring(0, 16);
-}
-
-function modulePcmPath(buildDirectory: string, logicalName: string, sourcePath: string | undefined): string {
-    const sourceKey = sourcePath ? normalizePath(sourcePath) : logicalName;
-    return normalizePath(path.join(buildDirectory, '.clangd', 'modules', `${encodeURIComponent(logicalName)}-${stableHash(sourceKey)}.pcm`));
+    return [output];
 }
 
 function toModuleEntry(
@@ -95,27 +65,28 @@ function isModmapResponseArgument(argument: string): boolean {
 }
 
 function filteredCommandArguments(entry: CompileCommand): string[] {
-    return (entry.arguments ?? []).filter(argument => !isModmapResponseArgument(argument));
+    return commandArguments(entry).filter(argument => !isModmapResponseArgument(argument));
 }
 
-function toFilteredCompileCommandsJson(database: CompilationDatabase): string {
-    return JSON.stringify(database.entries().map(entry => ({
+function toFilteredCompileCommandsJson(entry: CompileCommand): string {
+    return JSON.stringify([{
         directory: entry.directory,
         file: entry.file,
         output: entry.output,
         arguments: filteredCommandArguments(entry),
-    })), undefined, 2);
+    }], undefined, 2);
 }
 
 async function runClangScanDeps(
     compilationDatabasePath: string,
     clangScanDepsPath: string,
-    database: CompilationDatabase,
+    entry: CompileCommand,
+    temporaryDirectory: string,
+    environment: Environment | undefined,
 ): Promise<ClangScanDepsP1689Output> {
-    const temporaryDirectory = path.join(path.dirname(compilationDatabasePath), '.clangd', 'scan-deps');
-    await fs.mkdir_p(temporaryDirectory);
-    const filteredCompilationDatabasePath = path.join(temporaryDirectory, 'compile_commands.json');
-    await fs.writeFile(filteredCompilationDatabasePath, toFilteredCompileCommandsJson(database));
+    const id = stableHash(`${entry.directory}\0${entry.file}\0${compileCommandOutputs(entry).join('\0')}`);
+    const filteredCompilationDatabasePath = path.join(temporaryDirectory, `${id}.compile_commands.json`);
+    await fs.writeFile(filteredCompilationDatabasePath, toFilteredCompileCommandsJson(entry));
     const args = [
         '-compilation-database', filteredCompilationDatabasePath,
         '-format=p1689',
@@ -125,6 +96,7 @@ async function runClangScanDeps(
         encoding: 'utf8',
         silent: true,
         showOutputOnError: true,
+        environment,
     }).result;
     if (execution.retc !== 0)
         throw new Error(`clang-scan-deps failed with code ${execution.retc}: ${execution.stderr}`);
@@ -136,33 +108,23 @@ async function runClangScanDeps(
     }
 }
 
-function collectScanResults(
-    scanDepsOutput: ClangScanDepsP1689Output,
-    database: CompilationDatabase,
-    buildDirectory: string,
-): FileModuleImportExportEntries[] {
-    const commandsByOutput = buildOutputLookup(database);
-    return (scanDepsOutput.rules ?? []).flatMap(rule => {
-        const primaryOutput = normalizePath(rule['primary-output']);
-        const command = commandsByOutput.get(primaryOutput);
-        if (!command)
-            return [];
-        const file = resolveCommandPath(command, command.file);
-        return [{
-            file,
-            exports: (rule.provides ?? []).map(entry => toModuleEntry(entry, buildDirectory, file)),
-            imports: (rule.requires ?? []).map(entry => toModuleEntry(entry, buildDirectory, undefined)),
-        }];
-    });
-}
-
 export async function scan(
     compilationDatabasePath: string,
     clangScanDepsPath: string,
+    environment?: Environment,
 ): Promise<FileModuleImportExportEntries[]> {
     const database = await CompilationDatabase.fromFilePaths([compilationDatabasePath]);
     if (!database)
         return [];
     const buildDirectory = path.dirname(compilationDatabasePath);
-    return collectScanResults(await runClangScanDeps(compilationDatabasePath, clangScanDepsPath, database), database, buildDirectory);
+    const temporaryDirectory = path.join(buildDirectory, '.clangd', 'scan-deps', 'clang');
+    await fs.mkdir_p(temporaryDirectory);
+    const scanDepsOutputs = await Promise.all(database.entries().map(entry => runClangScanDeps(
+        compilationDatabasePath,
+        clangScanDepsPath,
+        entry,
+        temporaryDirectory,
+        environment,
+    )));
+    return collectScanResults(scanDepsOutputs, database, buildDirectory, compileCommandOutputs, toModuleEntry);
 }

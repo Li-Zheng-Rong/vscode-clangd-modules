@@ -1,13 +1,12 @@
-import * as crypto from 'crypto';
 import * as path from 'path';
 
 import {CompilationDatabase, CompileCommand} from '../compilation-database';
 import {fs} from '../pr';
 import * as proc from '../proc';
-import * as shlex from '../shlex';
 import * as util from '../util';
 
 import type {FileModuleImportExportEntries, ModuleImportExportEntry} from './index';
+import {collectScanResults, commandArguments, modulePcmPath, normalizePath, resolveCommandPath, stableHash} from './util';
 
 interface GccScanDepsModuleEntry {
     'logical-name': string;
@@ -22,23 +21,6 @@ interface GccScanDepsRule {
 
 interface GccScanDepsP1689Output {
     rules?: GccScanDepsRule[];
-}
-
-function normalizePath(filePath: string): string {
-    return util.platformNormalizePath(filePath);
-}
-
-function stableHash(value: string): string {
-    return crypto.createHash('sha256').update(value).digest('hex').substring(0, 16);
-}
-
-function resolveCommandPath(entry: CompileCommand, value: string): string {
-    const unquoted = value.replace(/^"|"$/g, '');
-    return normalizePath(path.isAbsolute(unquoted) ? unquoted : path.resolve(entry.directory, unquoted));
-}
-
-function commandArguments(entry: CompileCommand): string[] {
-    return entry.arguments ?? [...shlex.splitCommandLine(entry.command)];
 }
 
 function outputFromArguments(args: readonly string[]): string | undefined {
@@ -56,23 +38,11 @@ function compileCommandOutput(entry: CompileCommand): string | undefined {
     return entry.output ?? outputFromArguments(commandArguments(entry));
 }
 
-function compileCommandOutputKeys(entry: CompileCommand): string[] {
+function compileCommandOutputs(entry: CompileCommand): string[] {
     const output = compileCommandOutput(entry);
     if (!output)
         return [];
-    return [normalizePath(output), resolveCommandPath(entry, output)];
-}
-
-function buildOutputLookup(database: CompilationDatabase): Map<string, CompileCommand> {
-    const result = new Map<string, CompileCommand>();
-    for (const entry of database.entries())
-        for (const output of compileCommandOutputKeys(entry))
-            result.set(output, entry);
-    return result;
-}
-
-function modulePcmPath(buildDirectory: string, logicalName: string, sourcePath: string): string {
-    return normalizePath(path.join(buildDirectory, '.clangd', 'modules', `${encodeURIComponent(logicalName)}-${stableHash(normalizePath(sourcePath))}.pcm`));
+    return [output];
 }
 
 function optionValue(args: readonly string[], index: number, ...options: string[]): {nextIndex: number} | undefined {
@@ -172,27 +142,6 @@ function toModuleEntry(
     };
 }
 
-function collectScanResults(
-    scanDepsOutputs: readonly GccScanDepsP1689Output[],
-    database: CompilationDatabase,
-    buildDirectory: string,
-): FileModuleImportExportEntries[] {
-    const commandsByOutput = buildOutputLookup(database);
-    return scanDepsOutputs.flatMap(scanDepsOutput => (scanDepsOutput.rules ?? []).flatMap(rule => {
-        const primaryOutput = normalizePath(rule['primary-output']);
-        const command = commandsByOutput.get(primaryOutput);
-        if (!command)
-            return [];
-
-        const file = resolveCommandPath(command, command.file);
-        return [{
-            file,
-            exports: (rule.provides ?? []).map(entry => toModuleEntry(entry, buildDirectory, file)),
-            imports: (rule.requires ?? []).map(entry => toModuleEntry(entry, buildDirectory, undefined)),
-        }];
-    }));
-}
-
 export async function scan(compilationDatabasePath: string): Promise<FileModuleImportExportEntries[]> {
     const database = await CompilationDatabase.fromFilePaths([compilationDatabasePath]);
     if (!database)
@@ -202,5 +151,5 @@ export async function scan(compilationDatabasePath: string): Promise<FileModuleI
     await fs.mkdir_p(temporaryDirectory);
     const scanDepsOutputs = (await Promise.all(database.entries().map(entry => runGccScanDeps(entry, temporaryDirectory))))
         .filter((output): output is GccScanDepsP1689Output => !!output);
-    return collectScanResults(scanDepsOutputs, database, path.dirname(compilationDatabasePath));
+    return collectScanResults(scanDepsOutputs, database, path.dirname(compilationDatabasePath), compileCommandOutputs, toModuleEntry);
 }

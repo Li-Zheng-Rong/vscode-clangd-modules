@@ -2,7 +2,7 @@
     "name": "vscode-clangd-modules",
     "displayName": "clangd-modules",
     "description": "Fork of vscode-clangd, with modules support for gcc, clang and msvc",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "publisher": "zijinshanren",
     "license": "MIT",
     "homepage": "https://clangd.llvm.org/",

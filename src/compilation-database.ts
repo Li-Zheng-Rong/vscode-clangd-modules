@@ -3,6 +3,7 @@ import * as shlex from './shlex';
 import { fs } from './pr';
 import * as util from './util';
 import {createLogger} from './logging';
+import {responseFileTokenizationMode, tokenizeResponseFile} from './scan-deps/tokenizer';
 import * as nls from 'vscode-nls';
 
 nls.config({ messageFormat: nls.MessageFormat.bundle, bundleFormat: nls.BundleFormat.standalone })();
@@ -59,26 +60,79 @@ function optionValue(args: readonly string[], index: number, ...options: string[
     for (const option of options) {
         if (arg === option)
             return {nextIndex: index + 1};
-        if (arg.startsWith(`${option}=`))
+        if (arg.startsWith(`${option}=`) || arg.startsWith(`${option}:`))
             return {nextIndex: index};
     }
     return undefined;
 }
 
-function isModmapResponseArgument(argument: string): boolean {
-    return argument.startsWith('@') && util.platformNormalizePath(argument.substring(1)).endsWith('.modmap');
+function responseFilePath(directory: string, argument: string): string {
+    const filePath = argument.substring(1);
+    return path.isAbsolute(filePath) ? filePath : path.resolve(directory, filePath);
 }
 
-function preprocessArguments(args: readonly string[]): string[] {
+async function expandResponseFileArgument(
+    directory: string,
+    argument: string,
+    modeArgs: readonly string[],
+    expansionStack: Set<string>,
+): Promise<string[]> {
+    if (!argument.startsWith('@') || argument === '@')
+        return [argument];
+
+    const filePath = responseFilePath(directory, argument);
+    const normalizedPath = util.platformNormalizePath(filePath);
+    if (expansionStack.has(normalizedPath)) {
+        log.warning(localize('recursive.response.file', 'Skipping recursive response file {0}', `"${filePath}"`));
+        return [];
+    }
+
+    try {
+        const content = await fs.readFile(filePath);
+        const mode = responseFileTokenizationMode(modeArgs);
+        const tokens = tokenizeResponseFile(content.toString(), mode);
+        expansionStack.add(normalizedPath);
+        try {
+            return await expandResponseFileArguments(directory, tokens, modeArgs, expansionStack);
+        } finally {
+            expansionStack.delete(normalizedPath);
+        }
+    } catch (error) {
+        log.warning(localize('error.reading.response.file', 'Error reading response file {0}: {1}', `"${filePath}"`, util.errorToString(error)));
+        return [argument];
+    }
+}
+
+async function expandResponseFileArguments(
+    directory: string,
+    args: readonly string[],
+    modeArgs: readonly string[] = args,
+    expansionStack: Set<string> = new Set(),
+): Promise<string[]> {
+    const expanded: string[] = [];
+    for (const arg of args) {
+        expanded.push(...await expandResponseFileArgument(directory, arg, modeArgs, expansionStack));
+    }
+    return expanded;
+}
+
+function filterModuleArguments(args: readonly string[]): string[] {
     const filtered: string[] = [];
     for (let index = 0; index < args.length; index++) {
         const arg = args[index];
-        if (isModmapResponseArgument(arg))
+        if (arg === '-interface' || arg === '/interface' ||
+            arg === '-internalPartition' || arg === '/internalPartition')
             continue;
 
-        const moduleMapper = optionValue(args, index, '-fmodule-mapper');
-        if (moduleMapper) {
-            index = moduleMapper.nextIndex;
+        const moduleOption = optionValue(args, index,
+            '-ifcOutput', '/ifcOutput',
+            '-reference', '/reference',
+            '-x',
+            '-fmodule-output',
+            '-fmodule-file',
+            '-fmodule-mapper');
+        if (moduleOption) {
+            index = moduleOption.nextIndex;
             continue;
         }
 
@@ -87,14 +141,18 @@ function preprocessArguments(args: readonly string[]): string[] {
     return filtered;
 }
 
-function compileCommandFromRaw(raw: RawCompileCommand): CompileCommand {
+async function preprocessArguments(directory: string, args: readonly string[]): Promise<string[]> {
+    return filterModuleArguments(await expandResponseFileArguments(directory, args));
+}
+
+async function compileCommandFromRaw(raw: RawCompileCommand): Promise<CompileCommand> {
     const args = raw.arguments ? raw.arguments : raw.command ? [...shlex.splitCommandLine(raw.command)] : [];
     const directory = util.normalizePath(raw.directory, { normCase: 'never', normUnicode: 'platform' });
     return {
         directory,
         file: normalizeCompileCommandPath(directory, raw.file),
         output: raw.output ? normalizeCompileCommandPath(directory, raw.output) : undefined,
-        arguments: preprocessArguments(args),
+        arguments: await preprocessArguments(directory, args),
     };
 }
 
@@ -155,7 +213,7 @@ export class CompilationDatabase {
             const fileContent = await fs.readFile(path);
             try {
                 const content = JSON.parse(fileContent.toString()) as RawCompileCommand[];
-                database.push(...content.map(compileCommandFromRaw));
+                database.push(...await Promise.all(content.map(compileCommandFromRaw)));
             } catch (e) {
                 log.warning(localize('error.parsing.compilation.database', 'Error parsing compilation database {0}: {1}', `"${path}"`, util.errorToString(e)));
                 if (e instanceof Error && e.stack) {

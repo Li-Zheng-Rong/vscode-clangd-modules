@@ -32,3 +32,11 @@ export {scanEntry};
 export {scanClang};
 export {scanGcc};
 export {scanMsvc};
+export {
+    isClangClResponseFileMode,
+    responseFileTokenizationMode,
+    tokenizeResponseFile,
+    tokenizeResponseFileForCommand,
+    tokenizeResponseFileWithEolMarkers,
+} from './tokenizer';
+export type {ResponseFileToken, ResponseFileTokenizationMode, ResponseFileTokenizeOptions} from './tokenizer';

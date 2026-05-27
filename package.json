@@ -1,5 +1,5 @@
 {
-    "name": "vscode-clangd-modules",
+    "name": "vscode-clangd-modules-support",
     "displayName": "clangd-modules",
     "description": "Fork of vscode-clangd, with modules support for gcc, clang and msvc",
     "version": "0.7.1",

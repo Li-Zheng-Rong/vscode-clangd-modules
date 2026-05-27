@@ -226,8 +226,7 @@ export function compareVersion(va: Version, vb: Version) {
  * @throws An error if the extension is not found.
  */
 export function thisExtension() {
-    const extension = vscode.extensions.getExtension('li-zheng-rong.vscode-clangd-modules-support')
-        ?? vscode.extensions.getExtension('ms-vscode.vscode-clangd');
+    const extension = vscode.extensions.getExtension('li-zheng-rong.vscode-clangd-modules-support');
     if (!extension) {
         throw new Error(localize('extension.is.undefined', 'Extension is undefined!'));
     }

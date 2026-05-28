@@ -31,6 +31,10 @@ export interface CompilationDatabaseUpdate {
     removed: string[];
 }
 
+export interface CompilationDatabaseReadOptions {
+    readResponseFile?: (filePath: string) => Promise<string>;
+}
+
 function normalizeCompileCommandPath(directory: string, file: string): string {
     const resolved = path.isAbsolute(file) ? file : path.resolve(directory, file);
     return util.normalizePath(resolved, { normCase: 'never', normUnicode: 'platform' });
@@ -76,6 +80,7 @@ async function expandResponseFileArgument(
     argument: string,
     modeArgs: readonly string[],
     expansionStack: Set<string>,
+    options: CompilationDatabaseReadOptions,
 ): Promise<string[]> {
     if (!argument.startsWith('@') || argument === '@')
         return [argument];
@@ -88,18 +93,19 @@ async function expandResponseFileArgument(
     }
 
     try {
-        const content = await fs.readFile(filePath);
+        const content = options.readResponseFile
+            ? await options.readResponseFile(filePath)
+            : (await fs.readFile(filePath)).toString();
         const mode = responseFileTokenizationMode(modeArgs);
-        const tokens = tokenizeResponseFile(content.toString(), mode);
+        const tokens = tokenizeResponseFile(content, mode);
         expansionStack.add(normalizedPath);
         try {
-            return await expandResponseFileArguments(directory, tokens, modeArgs, expansionStack);
+            return await expandResponseFileArguments(directory, tokens, modeArgs, expansionStack, options);
         } finally {
             expansionStack.delete(normalizedPath);
         }
-    } catch (error) {
-        log.warning(localize('error.reading.response.file', 'Error reading response file {0}: {1}', `"${filePath}"`, util.errorToString(error)));
-        return [argument];
+    } catch {
+        return [];
     }
 }
 
@@ -108,10 +114,11 @@ async function expandResponseFileArguments(
     args: readonly string[],
     modeArgs: readonly string[] = args,
     expansionStack: Set<string> = new Set(),
+    options: CompilationDatabaseReadOptions = {},
 ): Promise<string[]> {
     const expanded: string[] = [];
     for (const arg of args) {
-        expanded.push(...await expandResponseFileArgument(directory, arg, modeArgs, expansionStack));
+        expanded.push(...await expandResponseFileArgument(directory, arg, modeArgs, expansionStack, options));
     }
     return expanded;
 }
@@ -141,18 +148,18 @@ function filterModuleArguments(args: readonly string[]): string[] {
     return filtered;
 }
 
-async function preprocessArguments(directory: string, args: readonly string[]): Promise<string[]> {
-    return filterModuleArguments(await expandResponseFileArguments(directory, args));
+async function preprocessArguments(directory: string, args: readonly string[], options: CompilationDatabaseReadOptions): Promise<string[]> {
+    return filterModuleArguments(await expandResponseFileArguments(directory, args, args, new Set(), options));
 }
 
-async function compileCommandFromRaw(raw: RawCompileCommand): Promise<CompileCommand> {
+async function compileCommandFromRaw(raw: RawCompileCommand, options: CompilationDatabaseReadOptions): Promise<CompileCommand> {
     const args = raw.arguments ? raw.arguments : raw.command ? [...shlex.splitCommandLine(raw.command)] : [];
     const directory = util.normalizePath(raw.directory, { normCase: 'never', normUnicode: 'platform' });
     return {
         directory,
         file: normalizeCompileCommandPath(directory, raw.file),
         output: raw.output ? normalizeCompileCommandPath(directory, raw.output) : undefined,
-        arguments: await preprocessArguments(directory, args),
+        arguments: await preprocessArguments(directory, args, options),
     };
 }
 
@@ -202,7 +209,7 @@ export class CompilationDatabase {
         return { changed, removed };
     }
 
-    public static async fromFilePaths(databasePaths: string[]): Promise<CompilationDatabase> {
+    public static async fromFilePaths(databasePaths: string[], options: CompilationDatabaseReadOptions = {}): Promise<CompilationDatabase> {
         const database: CompileCommand[] = [];
 
         for (const path of databasePaths) {
@@ -213,7 +220,7 @@ export class CompilationDatabase {
             const fileContent = await fs.readFile(path);
             try {
                 const content = JSON.parse(fileContent.toString()) as RawCompileCommand[];
-                database.push(...await Promise.all(content.map(compileCommandFromRaw)));
+                database.push(...await Promise.all(content.map(raw => compileCommandFromRaw(raw, options))));
             } catch (e) {
                 log.warning(localize('error.parsing.compilation.database', 'Error parsing compilation database {0}: {1}', `"${path}"`, util.errorToString(e)));
                 if (e instanceof Error && e.stack) {

@@ -24,6 +24,11 @@ export interface CompilationDatabaseScanDepsManagerOptions {
     modulesEnabled?: boolean;
 }
 
+interface ResponseFileWatcher {
+    watcher: vscode.FileSystemWatcher;
+    subscriptions: vscode.Disposable[];
+}
+
 async function readTextIfExists(filePath: string): Promise<string | undefined> {
     try {
         return (await fs.readFile(filePath)).toString();
@@ -71,6 +76,7 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     private database: CompilationDatabase = new CompilationDatabase([]);
     private clangdContext: ClangdContext | null = null;
     private cdbWatcher: vscode.FileSystemWatcher | undefined;
+    private readonly responseFileWatchers = new Map<string, ResponseFileWatcher>();
     private cdbRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     private sourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     private readonly pendingSourceRefreshes = new Set<string>();
@@ -128,6 +134,13 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         } catch {
             return;
         }
+
+        this.scheduleCdbRefresh();
+    }
+
+    private handleResponseFileChanged(uri: vscode.Uri): void {
+        if (!this.responseFileWatchers.has(util.platformNormalizePath(uri.fsPath)))
+            return;
 
         this.scheduleCdbRefresh();
     }
@@ -204,7 +217,15 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     }
 
     async refreshCdb(forceRewrite = false): Promise<boolean> {
-        const nextDatabase = await CompilationDatabase.fromFilePaths([this.compilationDatabasePath]) ?? new CompilationDatabase([]);
+        const responseFiles = new Set<string>();
+        const nextDatabase = await CompilationDatabase.fromFilePaths([this.compilationDatabasePath], {
+            readResponseFile: async filePath => {
+                responseFiles.add(util.platformNormalizePath(filePath));
+                return (await fs.readFile(filePath)).toString();
+            },
+        }) ?? new CompilationDatabase([]);
+        this.updateResponseFileWatchers(responseFiles);
+
         const update = this.database.replaceWith(nextDatabase);
         for (const file of update.removed)
             this.moduleDepsByFile.delete(file);
@@ -220,6 +241,39 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         return update.changed.length > 0 || update.removed.length > 0 || forceRewrite
             ? this.writeGeneratedCompileCommands(forceRewrite)
             : false;
+    }
+
+    private createResponseFileWatcher(filePath: string): ResponseFileWatcher {
+        const watcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath)));
+        const subscriptions = [
+            watcher.onDidChange(uri => { this.handleResponseFileChanged(uri); }),
+            watcher.onDidCreate(uri => { this.handleResponseFileChanged(uri); }),
+            watcher.onDidDelete(uri => { this.handleResponseFileChanged(uri); }),
+            watcher,
+        ];
+        return { watcher, subscriptions };
+    }
+
+    private disposeResponseFileWatcher(responseFileWatcher: ResponseFileWatcher): void {
+        responseFileWatcher.subscriptions.forEach(subscription => { subscription.dispose(); });
+    }
+
+    private updateResponseFileWatchers(responseFiles: ReadonlySet<string>): void {
+        for (const [filePath, responseFileWatcher] of this.responseFileWatchers) {
+            if (responseFiles.has(filePath))
+                continue;
+
+            this.disposeResponseFileWatcher(responseFileWatcher);
+            this.responseFileWatchers.delete(filePath);
+        }
+
+        for (const filePath of responseFiles) {
+            if (this.responseFileWatchers.has(filePath))
+                continue;
+
+            this.responseFileWatchers.set(filePath, this.createResponseFileWatcher(filePath));
+        }
     }
 
     private async scanAndUpdate(entry: CompileCommand): Promise<void> {
@@ -367,6 +421,8 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         if (this.sourceRefreshTimer)
             clearTimeout(this.sourceRefreshTimer);
         this.pendingSourceRefreshes.clear();
+        this.responseFileWatchers.forEach(responseFileWatcher => { this.disposeResponseFileWatcher(responseFileWatcher); });
+        this.responseFileWatchers.clear();
         this.subscriptions.forEach(subscription => { subscription.dispose(); });
         this.subscriptions.length = 0;
         this.shutdownClangd();

@@ -70,6 +70,15 @@ async function findProgramByName(name: string): Promise<string | undefined> {
     return undefined;
 }
 
+function withEnglishLocale(environment: Environment | undefined): Environment {
+    return {
+        ...(environment ?? {}),
+        LC_ALL: 'C',
+        LC_MESSAGES: 'C',
+        LANG: 'C',
+    };
+}
+
 export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
     private readonly onDidChangeClientEmitter = new vscode.EventEmitter<BaseLanguageClient | undefined>();
     private readonly subscriptions: vscode.Disposable[] = [];
@@ -316,9 +325,11 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
             return;
         }
 
-        const environment = await this.visualStudioEnvironmentFromCdb();
+        const toolchainEnvironment = await this.visualStudioEnvironmentFromCdb();
+        const environment = withEnglishLocale(toolchainEnvironment);
         const queryDriver = await this.queryDriverFromCompilers();
-        this.logClangdEnvironment(environment);
+        this.logClangdEnvironment(toolchainEnvironment);
+        this.logClangdLocale(environment);
         this.logClangdQueryDriver(queryDriver);
         this.clangdContext = await ClangdContext.create(
             this.options.globalStoragePath,
@@ -408,6 +419,10 @@ export class CompilationDatabaseScanDepsManager implements vscode.Disposable {
         const pathValue = environment.PATH ?? '';
         log.info(`Starting clangd with Visual Studio environment from CDB: INCLUDE=${include ? 'set' : 'missing'}, LIB=${lib ? 'set' : 'missing'}, PATH=${pathValue ? 'set' : 'missing'}`);
         log.debug(`Visual Studio INCLUDE for clangd: ${include}`);
+    }
+
+    private logClangdLocale(environment: Environment): void {
+        log.debug(`Starting clangd with locale: LC_ALL=${environment.LC_ALL}, LC_MESSAGES=${environment.LC_MESSAGES}, LANG=${environment.LANG}`);
     }
 
     private logClangdQueryDriver(queryDriver: string | undefined): void {
